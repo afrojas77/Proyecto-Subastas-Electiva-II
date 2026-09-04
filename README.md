@@ -1,6 +1,6 @@
 # Subastas
 
-Base técnica de una API REST académica para un sistema de subastas. Este primer paso incluye el servidor y su comprobación técnica; todavía no implementa el modelo ni las reglas de negocio.
+API REST académica para un sistema de subastas. La entrega actual incluye la base técnica y un modelo de dominio aislado de la infraestructura.
 
 ## Tecnologías
 
@@ -69,4 +69,10 @@ src/
 └── index.ts                         # Arranque del servidor
 ```
 
-La organización sigue arquitectura hexagonal: `domain` permanece independiente; `application` coordina el dominio; `infrastructure` contiene los adaptadores de entrada y salida. En esta base solo existe la ruta técnica `GET /health`; las piezas de negocio se añadirán de forma incremental.
+La organización sigue arquitectura hexagonal: `domain` permanece independiente; `application` coordina el dominio; `infrastructure` contiene los adaptadores de entrada y salida. La API todavía expone únicamente la ruta técnica `GET /health`.
+
+## Modelo de dominio
+
+`Auction` es la raíz del agregado de subasta y protege la publicación, las condiciones inmutables, la cancelación, la recepción y auditoría de pujas y el cierre idempotente. `Bid` y `RejectedBidAttempt` pertenecen a ese agregado. `User`, `PaymentOrder`, `PaymentEvent` y `Notification` conservan identidad propia; `Money`, `Email`, `AuctionStatus`, `Article` y `Category` son valores inmutables y autovalidados.
+
+Los contratos de `src/domain/ports` expresan las necesidades futuras de persistencia sin acoplar el dominio a una base de datos. La integración de pagos, los canales de notificación y los casos de uso HTTP todavía no están implementados.
