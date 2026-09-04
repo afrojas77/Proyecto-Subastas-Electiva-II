@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: API de Subastas
+  version: 1.0.0
+  description: API académica para publicar, consultar, pujar, cancelar y cerrar subastas.
+servers:
+  - url: http://localhost:3000
+paths:
+  /api/auctions:
+    get:
+      summary: Lista subastas
+      responses:
+        '200':
+          description: Lista disponible
+    post:
+      summary: Publica una subasta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishAuctionRequest'
+      responses:
+        '201': { description: Subasta publicada }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/auctions/{id}:
+    get:
+      summary: Consulta una subasta
+      parameters: [{ $ref: '#/components/parameters/AuctionId' }]
+      responses:
+        '200': { description: Subasta encontrada }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/auctions/{id}/bids:
+    get:
+      summary: Consulta el historial público de pujas
+      parameters: [{ $ref: '#/components/parameters/AuctionId' }]
+      responses:
+        '200': { description: Historial sin datos de contacto }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Registra una puja
+      parameters: [{ $ref: '#/components/parameters/AuctionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceBidRequest'
+      responses:
+        '201': { description: Puja aceptada }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/auctions/{id}/cancel:
+    post:
+      summary: Cancela una subasta sin pujas
+      parameters: [{ $ref: '#/components/parameters/AuctionId' }]
+      responses:
+        '200': { description: Subasta cancelada }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/auctions/{id}/close:
+    post:
+      summary: Cierra una subasta y devuelve su resultado
+      parameters: [{ $ref: '#/components/parameters/AuctionId' }]
+      responses:
+        '200': { description: Resultado de cierre idempotente }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  parameters:
+    AuctionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    PublishAuctionRequest:
+      type: object
+      required:
+        [id, sellerId, article, category, basePrice, minimumIncrement, closesAt]
+      properties:
+        id: { type: string }
+        sellerId: { type: string }
+        article:
+          type: object
+          required: [denomination, description, conservationState]
+          properties:
+            denomination: { type: string }
+            description: { type: string }
+            conservationState:
+              { type: string, enum: [NEW, LIKE_NEW, USED, RESTORED] }
+        category: { type: string }
+        basePrice: { type: integer, minimum: 0 }
+        minimumIncrement: { type: integer, minimum: 0 }
+        closesAt: { type: string, format: date-time }
+    PlaceBidRequest:
+      type: object
+      required: [id, bidderId, amount]
+      properties:
+        id: { type: string }
+        bidderId: { type: string }
+        amount: { type: integer, minimum: 0 }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+  responses:
+    BadRequest:
+      description: Datos inválidos o regla de negocio rechazada
+      content:
+        { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Recurso inexistente
+      content:
+        { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Conflicto de estado
+      content:
+        { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

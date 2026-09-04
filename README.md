@@ -1,6 +1,6 @@
 # Subastas
 
-API REST académica para un sistema de subastas. La entrega actual incluye la base técnica y un modelo de dominio aislado de la infraestructura.
+API REST académica para publicar artículos en subasta, registrar pujas, consultar su historial, cancelar ofertas sin pujas y cerrar subastas. La persistencia de esta entrega es temporal, en memoria.
 
 ## Tecnologías
 
@@ -53,26 +53,40 @@ npm run format:check
 npm test
 ```
 
-## Estructura inicial
+## Arquitectura
+
+La aplicación sigue arquitectura hexagonal: `Domain` contiene reglas y puertos sin conocer HTTP; `Application` coordina los casos de uso mediante esos puertos; `Infrastructure` implementa HTTP, tiempo, logging y persistencia en memoria. La composición de dependencias ocurre en `src/app.ts`.
+
+## Estructura
 
 ```text
 src/
-├── domain/                         # Núcleo y contratos del negocio
-├── application/                    # Casos de uso y coordinación
+├── domain/                         # Núcleo, reglas y puertos
+├── application/                    # Casos de uso que coordinan puertos
 ├── infrastructure/
 │   ├── http/
 │   │   ├── controllers/            # Adaptadores de entrada HTTP
 │   │   └── routes/                 # Definición de rutas Express
 │   └── persistence/
-│       └── memory/                 # Futuros adaptadores en memoria
+│       └── memory/                 # Adaptadores con Map en memoria
 ├── app.ts                           # Configuración de Express
 └── index.ts                         # Arranque del servidor
 ```
 
-La organización sigue arquitectura hexagonal: `domain` permanece independiente; `application` coordina el dominio; `infrastructure` contiene los adaptadores de entrada y salida. La API todavía expone únicamente la ruta técnica `GET /health`.
+La API expone `GET /health` y los recursos documentados en `docs/openapi.yaml`.
 
 ## Modelo de dominio
 
 `Auction` es la raíz del agregado de subasta y protege la publicación, las condiciones inmutables, la cancelación, la recepción y auditoría de pujas y el cierre idempotente. `Bid` y `RejectedBidAttempt` pertenecen a ese agregado. `User`, `PaymentOrder`, `PaymentEvent` y `Notification` conservan identidad propia; `Money`, `Email`, `AuctionStatus`, `Article` y `Category` son valores inmutables y autovalidados.
 
-Los contratos de `src/domain/ports` expresan las necesidades futuras de persistencia sin acoplar el dominio a una base de datos. La integración de pagos, los canales de notificación y los casos de uso HTTP todavía no están implementados.
+Los contratos de `src/domain/ports` expresan las necesidades de persistencia sin acoplar el dominio a una base de datos.
+
+## Reglas de negocio
+
+Implementadas en Domain y demostradas desde Application/API: RN-01 a RN-16 y RN-21. `PlaceBid` coordina RN-12: guarda la subasta aun cuando el dominio rechaza una puja, preservando el intento de auditoría.
+
+Preparadas, pero no completadas sin sus adaptadores o casos de uso posteriores: RN-17 y RN-18 (verificación externa de pagos), RN-19 (idempotencia de eventos), RN-20 (vencimiento coordinado), RN-22 (registro de usuario y unicidad global) y RN-23 (autenticación para limitar el historial a usuarios registrados). El historial API actual no expone datos de contacto.
+
+## API
+
+El contrato de la API está en `docs/openapi.yaml`. Incluye publicación, consulta, listado, pujas, historial, cancelación y cierre de subastas.
