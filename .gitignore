@@ -125,6 +125,16 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# Local editor and operating-system settings
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
 # pnpm
 .pnpm-store
 
