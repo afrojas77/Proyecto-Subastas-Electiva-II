@@ -3,6 +3,7 @@ import type { AuctionRepository } from '../../domain/ports/auction.repository';
 import type { Clock } from '../../domain/ports/clock';
 import { Money } from '../../domain/value-objects/money';
 import type { Bid } from '../../domain/entities/bid';
+import type { RealtimeEventPublisher } from '../ports/realtime-event-publisher';
 import { GetAuction } from './get-auction';
 
 export interface PlaceBidCommand {
@@ -18,6 +19,7 @@ export class PlaceBid {
   constructor(
     private readonly auctionRepository: AuctionRepository,
     private readonly clock: Clock,
+    private readonly realtimeEventPublisher: RealtimeEventPublisher,
   ) {
     this.getAuction = new GetAuction(auctionRepository);
   }
@@ -33,6 +35,14 @@ export class PlaceBid {
         placedAt: this.clock.now(),
       });
       await this.auctionRepository.save(auction);
+      await this.realtimeEventPublisher.publish({
+        type: 'auction:bid-accepted',
+        auctionId: bid.auctionId,
+        bidId: bid.id,
+        amount: bid.amount.amount,
+        placedAt: bid.placedAt.toISOString(),
+        sequence: bid.sequence,
+      });
       return bid;
     } catch (error: unknown) {
       if (error instanceof BidRejectedError) {

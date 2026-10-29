@@ -1,7 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
 import request from 'supertest';
 
-import { app } from '../../../app';
+import { createApp } from '../../../app';
+
+const app = createApp({
+  realtimeEventPublisher: { publish: () => Promise.resolve() },
+});
 
 describe('GET /health', () => {
   it('confirma que el servidor está disponible', async () => {

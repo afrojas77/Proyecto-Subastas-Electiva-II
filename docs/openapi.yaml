@@ -66,6 +66,32 @@ paths:
         '200': { description: Resultado de cierre idempotente }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/payments/webhook:
+    post:
+      summary: Recibe una notificación de la pasarela simulada de desarrollo
+      description: El secreto compartido simulado no sustituye la verificación criptográfica de una pasarela real.
+      parameters:
+        - name: x-simulated-payment-webhook-secret
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentNotificationRequest'
+      responses:
+        '200':
+          description: Evento procesado o respuesta original de un reintento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentProcessingResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   parameters:
     AuctionId:
@@ -100,6 +126,22 @@ components:
         id: { type: string }
         bidderId: { type: string }
         amount: { type: integer, minimum: 0 }
+    PaymentNotificationRequest:
+      type: object
+      required: [id, paymentOrderId, result, occurredAt]
+      properties:
+        id: { type: string }
+        paymentOrderId: { type: string }
+        result: { type: string, enum: [APPROVED, REJECTED] }
+        occurredAt: { type: string, format: date-time }
+    PaymentProcessingResponse:
+      type: object
+      required: [eventId, paymentOrderId, result, orderStatus]
+      properties:
+        eventId: { type: string }
+        paymentOrderId: { type: string }
+        result: { type: string, enum: [APPROVED, REJECTED] }
+        orderStatus: { type: string, enum: [PENDING, PAID, EXPIRED] }
     Error:
       type: object
       properties:
@@ -119,5 +161,9 @@ components:
         { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     Conflict:
       description: Conflicto de estado
+      content:
+        { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: No se pudo verificar el origen de la notificación
       content:
         { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

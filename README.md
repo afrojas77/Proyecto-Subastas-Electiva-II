@@ -6,6 +6,7 @@ API REST académica para publicar artículos en subasta, registrar pujas, consul
 
 - Node.js 20 o posterior
 - Express
+- Socket.IO
 - TypeScript
 - Jest y Supertest
 - ESLint y Prettier
@@ -18,7 +19,7 @@ npm install
 
 ## Configuración
 
-No se requieren credenciales ni variables de entorno para esta base. De forma opcional, `PORT` permite cambiar el puerto predeterminado `3000`; por eso no se incluye un archivo `.env.example` en este paso.
+`PORT` permite cambiar el puerto predeterminado `3000`. El webhook académico de pagos usa `SIMULATED_PAYMENT_WEBHOOK_SECRET`; si no se define fuera de producción, se utiliza un valor local explícitamente inseguro. Este verificador simula el origen externo para desarrollo y pruebas, no sustituye la firma criptográfica de una pasarela real y la aplicación lo rechaza cuando `NODE_ENV=production`.
 
 ## Ejecución
 
@@ -28,7 +29,7 @@ Iniciar el servidor en desarrollo con recarga automática:
 npm run dev
 ```
 
-De forma predeterminada, la API escucha en `http://localhost:3000`.
+De forma predeterminada, la API y Socket.IO comparten el servidor HTTP en `http://localhost:3000`.
 
 Comprobar el servidor:
 
@@ -55,7 +56,7 @@ npm test
 
 ## Arquitectura
 
-La aplicación sigue arquitectura hexagonal: `Domain` contiene reglas y puertos sin conocer HTTP; `Application` coordina los casos de uso mediante esos puertos; `Infrastructure` implementa HTTP, tiempo, logging y persistencia en memoria. La composición de dependencias ocurre en `src/app.ts`.
+La aplicación sigue arquitectura hexagonal: `Domain` contiene reglas y puertos sin conocer HTTP; `Application` coordina los casos de uso y publica eventos mediante `RealtimeEventPublisher`; `Infrastructure` implementa HTTP, Socket.IO, tiempo, logging y persistencia en memoria. La composición de los casos de uso ocurre en `src/app.ts`, mientras `src/index.ts` conecta Express y Socket.IO al mismo servidor HTTP.
 
 ## Estructura
 
@@ -67,6 +68,7 @@ src/
 │   ├── http/
 │   │   ├── controllers/            # Adaptadores de entrada HTTP
 │   │   └── routes/                 # Definición de rutas Express
+│   ├── realtime/                    # Adaptador de salida Socket.IO
 │   └── persistence/
 │       └── memory/                 # Adaptadores con Map en memoria
 ├── app.ts                           # Configuración de Express
@@ -85,8 +87,14 @@ Los contratos de `src/domain/ports` expresan las necesidades de persistencia sin
 
 Implementadas en Domain y demostradas desde Application/API: RN-01 a RN-16 y RN-21. `PlaceBid` coordina RN-12: guarda la subasta aun cuando el dominio rechaza una puja, preservando el intento de auditoría.
 
-Preparadas, pero no completadas sin sus adaptadores o casos de uso posteriores: RN-17 y RN-18 (verificación externa de pagos), RN-19 (idempotencia de eventos), RN-20 (vencimiento coordinado), RN-22 (registro de usuario y unicidad global) y RN-23 (autenticación para limitar el historial a usuarios registrados). El historial API actual no expone datos de contacto.
+RN-17 a RN-19 se demuestran con un webhook y un verificador de secreto compartido exclusivo de desarrollo. La persistencia en memoria reproduce respuestas en reintentos secuenciales, pero no garantiza idempotencia atómica concurrente. RN-20 dispone de transición y caso de uso para procesar una orden identificada; todavía falta descubrir automáticamente las órdenes vencidas y ejecutar el caso de uso mediante un coordinador programado. Continúan pendientes RN-22 (registro y unicidad global) y RN-23 (autenticación para limitar el historial a usuarios registrados). El historial API y los eventos en tiempo real no exponen datos de contacto.
 
 ## API
 
-El contrato de la API está en `docs/openapi.yaml`. Incluye publicación, consulta, listado, pujas, historial, cancelación y cierre de subastas.
+El contrato de la API está en `docs/openapi.yaml`. Incluye publicación, consulta, listado, pujas, historial, cancelación y cierre de subastas, además del webhook simulado `POST /api/payments/webhook`.
+
+## Eventos en tiempo real
+
+Socket.IO publica `auction:bid-accepted`, `auction:closed`, `payment:confirmed` y `auction:defaulted` en la sala `auction:{auctionId}`. Un cliente puede solicitar la unión mediante `auction:join`, enviando el ID de la subasta. Esta unión sólo valida la forma del ID: antes de producción debe autenticar la conexión y autorizar que el usuario pueda observar la subasta solicitada.
+
+Los eventos se emiten después de las escrituras de aplicación y no contienen correos, contraseñas, datos de contacto ni información de verificación del webhook. La implementación actual no ofrece transacciones, outbox, reintentos ni entrega exactamente una vez; una caída entre persistencia y publicación puede perder el evento.

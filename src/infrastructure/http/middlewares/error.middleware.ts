@@ -1,9 +1,13 @@
 import type { NextFunction, Request, Response } from 'express';
 
+import { InvalidPaymentNotificationError } from '../../../application/errors/invalid-payment-notification.error';
+import { PaymentEventConflictError } from '../../../application/errors/payment-event-conflict.error';
 import { ResourceNotFoundError } from '../../../application/errors/resource-not-found.error';
+import { UnverifiedPaymentNotificationError } from '../../../application/errors/unverified-payment-notification.error';
 import { BidRejectedError } from '../../../domain/errors/bid-rejected.error';
 import { DomainError } from '../../../domain/errors/domain.error';
 import { InvalidAuctionStateError } from '../../../domain/errors/invalid-auction-state.error';
+import { InvalidPaymentOrderStateError } from '../../../domain/errors/invalid-payment-order-state.error';
 import { ConsoleLogger } from '../../logging/console-logger';
 import { HttpValidationError } from '../errors/http-validation.error';
 
@@ -26,7 +30,22 @@ export function createErrorMiddleware(logger: ConsoleLogger) {
       sendError(response, 404, 'RESOURCE_NOT_FOUND', error.message);
       return;
     }
-    if (error instanceof InvalidAuctionStateError) {
+    if (error instanceof UnverifiedPaymentNotificationError) {
+      sendError(response, 401, 'UNVERIFIED_PAYMENT_NOTIFICATION', error.message);
+      return;
+    }
+    if (error instanceof PaymentEventConflictError) {
+      sendError(response, 409, 'PAYMENT_EVENT_CONFLICT', error.message);
+      return;
+    }
+    if (error instanceof InvalidPaymentNotificationError) {
+      sendError(response, 400, 'INVALID_PAYMENT_NOTIFICATION', error.message);
+      return;
+    }
+    if (
+      error instanceof InvalidAuctionStateError ||
+      error instanceof InvalidPaymentOrderStateError
+    ) {
       sendError(response, 409, error.code, error.message);
       return;
     }

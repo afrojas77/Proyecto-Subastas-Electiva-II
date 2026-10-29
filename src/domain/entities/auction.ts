@@ -37,6 +37,19 @@ export interface CloseAuctionData {
   paymentOrderId: string;
 }
 
+export interface AuctionClosureSnapshot {
+  winningBidId?: string;
+  paymentOrder?: PaymentOrder;
+}
+
+export interface AuctionSnapshot extends PublishAuctionData {
+  publishedAt: Date;
+  status: AuctionStatus;
+  acceptedBids: readonly Bid[];
+  rejectedBidAttempts: readonly RejectedBidAttempt[];
+  closure?: AuctionClosureSnapshot;
+}
+
 export class Auction {
   readonly #id: string;
   readonly #sellerId: string;
@@ -96,6 +109,38 @@ export class Auction {
     }
 
     return new Auction(data, publishedAt);
+  }
+
+  static restore(snapshot: AuctionSnapshot): Auction {
+    const auction = new Auction(snapshot, snapshot.publishedAt);
+    auction.#status = snapshot.status;
+
+    snapshot.acceptedBids.forEach((bid, index) => {
+      if (bid.auctionId !== auction.id) {
+        throw new InvalidAuctionError(
+          `La puja ${bid.id} no pertenece a la subasta ${auction.id}.`,
+        );
+      }
+      if (bid.sequence !== index + 1) {
+        throw new InvalidAuctionError(
+          'Las pujas restauradas deben conservar una secuencia consecutiva y ordenada.',
+        );
+      }
+      auction.#acceptedBids.push(bid);
+    });
+
+    snapshot.rejectedBidAttempts.forEach((attempt) => {
+      if (attempt.auctionId !== auction.id) {
+        throw new InvalidAuctionError(
+          `El intento rechazado ${attempt.id} no pertenece a la subasta ${auction.id}.`,
+        );
+      }
+      auction.#rejectedBidAttempts.push(attempt);
+    });
+
+    auction.#closure = auction.restoreClosure(snapshot.closure);
+    auction.validateRestoredState();
+    return auction;
   }
 
   get id(): string {
@@ -285,6 +330,56 @@ export class Auction {
     return this.#closure;
   }
 
+  markAsDefaulted(paymentOrder: PaymentOrder): AuctionClosure {
+    if (!this.#status.equals(AuctionStatus.CLOSED)) {
+      throw new InvalidAuctionStateError(
+        'Solo una subasta cerrada y adjudicada puede pasar a incumplimiento.',
+      );
+    }
+
+    const winningBid = this.#closure?.winningBid;
+    const currentPaymentOrder = this.#closure?.paymentOrder;
+    if (!winningBid || !currentPaymentOrder) {
+      throw new InvalidAuctionStateError(
+        'La subasta adjudicada requiere una puja ganadora y una orden de pago.',
+      );
+    }
+    if (paymentOrder.id !== currentPaymentOrder.id) {
+      throw new InvalidAuctionStateError(
+        'La orden vencida no corresponde al cierre de la subasta.',
+      );
+    }
+    if (paymentOrder.auctionId !== this.#id) {
+      throw new InvalidAuctionStateError(
+        'La orden vencida pertenece a otra subasta.',
+      );
+    }
+    if (paymentOrder.debtorId !== winningBid.bidderId) {
+      throw new InvalidAuctionStateError(
+        'El deudor de la orden no coincide con el ganador.',
+      );
+    }
+    if (!paymentOrder.amount.equals(winningBid.amount)) {
+      throw new InvalidAuctionStateError(
+        'El importe de la orden no coincide con la puja ganadora.',
+      );
+    }
+    if (paymentOrder.status !== 'EXPIRED') {
+      throw new InvalidAuctionStateError(
+        'La subasta solo puede pasar a incumplimiento con una orden vencida.',
+      );
+    }
+
+    this.#status = AuctionStatus.DEFAULTED;
+    this.#closure = new AuctionClosure(
+      this.#id,
+      this.#status,
+      winningBid,
+      paymentOrder,
+    );
+    return this.#closure;
+  }
+
   private rejectBid(
     data: ReceiveBidData,
     bidderId: string,
@@ -302,5 +397,80 @@ export class Auction {
       ),
     );
     throw new BidRejectedError(reason);
+  }
+
+  private restoreClosure(
+    snapshot: AuctionClosureSnapshot | undefined,
+  ): AuctionClosure | undefined {
+    if (!snapshot) {
+      return undefined;
+    }
+
+    const winningBid = snapshot.winningBidId
+      ? this.#acceptedBids.find((bid) => bid.id === snapshot.winningBidId)
+      : undefined;
+    if (snapshot.winningBidId && !winningBid) {
+      throw new InvalidAuctionError(
+        `La puja ganadora ${snapshot.winningBidId} no pertenece a la subasta.`,
+      );
+    }
+
+    return new AuctionClosure(
+      this.#id,
+      this.#status,
+      winningBid,
+      snapshot.paymentOrder,
+    );
+  }
+
+  private validateRestoredState(): void {
+    const isOpen = this.#status.equals(AuctionStatus.OPEN);
+    const isCancelled = this.#status.equals(AuctionStatus.CANCELLED);
+    const isDeserted = this.#status.equals(AuctionStatus.DESERTED);
+    const isAwarded =
+      this.#status.equals(AuctionStatus.CLOSED) ||
+      this.#status.equals(AuctionStatus.DEFAULTED);
+
+    if ((isOpen || isCancelled) && this.#closure) {
+      throw new InvalidAuctionError(
+        'Una subasta abierta o cancelada no puede tener resultado de cierre.',
+      );
+    }
+    if (isCancelled && this.#acceptedBids.length > 0) {
+      throw new InvalidAuctionError(
+        'Una subasta cancelada no puede contener pujas aceptadas.',
+      );
+    }
+    if (isDeserted) {
+      if (
+        !this.#closure ||
+        this.#acceptedBids.length > 0 ||
+        this.#closure.winningBid ||
+        this.#closure.paymentOrder
+      ) {
+        throw new InvalidAuctionError(
+          'Una subasta desierta debe tener un cierre sin puja ganadora ni orden de pago.',
+        );
+      }
+      return;
+    }
+    if (isAwarded) {
+      const winningBid = this.#closure?.winningBid;
+      const paymentOrder = this.#closure?.paymentOrder;
+      if (!winningBid || !paymentOrder || winningBid !== this.highestBid) {
+        throw new InvalidAuctionError(
+          'Una subasta adjudicada requiere la última puja como ganadora y su orden de pago.',
+        );
+      }
+      if (
+        paymentOrder.auctionId !== this.#id ||
+        paymentOrder.debtorId !== winningBid.bidderId ||
+        !paymentOrder.amount.equals(winningBid.amount)
+      ) {
+        throw new InvalidAuctionError(
+          'La orden restaurada no coincide con la puja ganadora.',
+        );
+      }
+    }
   }
 }

@@ -3,6 +3,7 @@ import request from 'supertest';
 import type { Response as SupertestResponse } from 'supertest';
 
 import { createApp } from '../../../app';
+import type { RealtimeEventPublisher } from '../../../application/ports/realtime-event-publisher';
 import type { Clock } from '../../../domain/ports/clock';
 
 class MutableClock implements Clock {
@@ -18,6 +19,9 @@ class MutableClock implements Clock {
 }
 
 const PUBLISHED_AT = new Date('2026-01-01T12:00:00.000Z');
+const silentPublisher: RealtimeEventPublisher = {
+  publish: () => Promise.resolve(),
+};
 
 function auctionPayload(id = 'auction-1') {
   return {
@@ -37,7 +41,12 @@ function auctionPayload(id = 'auction-1') {
 
 function setupApi() {
   const clock = new MutableClock(PUBLISHED_AT);
-  return { api: request(createApp({ clock })), clock };
+  return {
+    api: request(
+      createApp({ clock, realtimeEventPublisher: silentPublisher }),
+    ),
+    clock,
+  };
 }
 
 function responseBody<T>(response: SupertestResponse): T {

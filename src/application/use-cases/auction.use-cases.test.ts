@@ -4,6 +4,10 @@ import { BidRejectedError } from '../../domain/errors/bid-rejected.error';
 import type { Clock } from '../../domain/ports/clock';
 import { InMemoryAuctionRepository } from '../../infrastructure/persistence/memory/in-memory-auction.repository';
 import { InMemoryPaymentOrderRepository } from '../../infrastructure/persistence/memory/in-memory-payment-order.repository';
+import type {
+  RealtimeEvent,
+  RealtimeEventPublisher,
+} from '../ports/realtime-event-publisher';
 import { CancelAuction } from './cancel-auction';
 import { CloseAuction } from './close-auction';
 import { GetAuction } from './get-auction';
@@ -24,22 +28,38 @@ class FixedClock implements Clock {
 
 const PUBLISHED_AT = new Date('2026-01-01T12:00:00.000Z');
 
+class RecordingRealtimeEventPublisher implements RealtimeEventPublisher {
+  readonly events: RealtimeEvent[] = [];
+
+  publish(event: RealtimeEvent): Promise<void> {
+    this.events.push(event);
+    return Promise.resolve();
+  }
+}
+
 function setup() {
   const auctionRepository = new InMemoryAuctionRepository();
   const paymentOrderRepository = new InMemoryPaymentOrderRepository();
   const clock = new FixedClock(PUBLISHED_AT);
+  const realtimeEventPublisher = new RecordingRealtimeEventPublisher();
   return {
     auctionRepository,
     paymentOrderRepository,
     clock,
+    realtimeEventPublisher,
     publishAuction: new PublishAuction(auctionRepository, clock),
     getAuction: new GetAuction(auctionRepository),
     cancelAuction: new CancelAuction(auctionRepository),
-    placeBid: new PlaceBid(auctionRepository, clock),
+    placeBid: new PlaceBid(
+      auctionRepository,
+      clock,
+      realtimeEventPublisher,
+    ),
     closeAuction: new CloseAuction(
       auctionRepository,
       clock,
       paymentOrderRepository,
+      realtimeEventPublisher,
     ),
   };
 }
@@ -98,6 +118,19 @@ describe('casos de uso de subastas', () => {
     expect(
       (await context.getAuction.execute('auction-1')).acceptedBids,
     ).toHaveLength(1);
+    expect(context.realtimeEventPublisher.events).toEqual([
+      {
+        type: 'auction:bid-accepted',
+        auctionId: 'auction-1',
+        bidId: 'bid-1',
+        amount: 100_000,
+        placedAt: PUBLISHED_AT.toISOString(),
+        sequence: 1,
+      },
+    ]);
+    expect(context.realtimeEventPublisher.events[0]).not.toHaveProperty(
+      'bidderId',
+    );
   });
 
   it('persiste el intento rechazado antes de propagar el error', async () => {
@@ -116,6 +149,28 @@ describe('casos de uso de subastas', () => {
     const auction = await context.getAuction.execute('auction-1');
     expect(auction.rejectedBidAttempts).toHaveLength(1);
     expect(auction.rejectedBidAttempts[0]?.reason).toBe('BID_BELOW_BASE_PRICE');
+    expect(context.realtimeEventPublisher.events).toHaveLength(0);
+  });
+
+  it('no retorna éxito cuando el publicador rechaza la emisión', async () => {
+    const context = setup();
+    await publishDefaultAuction(context);
+    const placeBid = new PlaceBid(context.auctionRepository, context.clock, {
+      publish: () => Promise.reject(new Error('Socket.IO no disponible')),
+    });
+
+    await expect(
+      placeBid.execute({
+        id: 'bid-1',
+        auctionId: 'auction-1',
+        bidderId: 'bidder-1',
+        amount: 100_000,
+      }),
+    ).rejects.toThrow('Socket.IO no disponible');
+
+    expect(
+      (await context.getAuction.execute('auction-1')).acceptedBids,
+    ).toHaveLength(1);
   });
 
   it('cierra la subasta y conserva el resultado del segundo cierre', async () => {
@@ -137,5 +192,26 @@ describe('casos de uso de subastas', () => {
     expect(
       await context.paymentOrderRepository.findById('payment-auction-1'),
     ).toBe(firstClosure.paymentOrder);
+    expect(context.realtimeEventPublisher.events).toEqual([
+      {
+        type: 'auction:bid-accepted',
+        auctionId: 'auction-1',
+        bidId: 'bid-1',
+        amount: 100_000,
+        placedAt: PUBLISHED_AT.toISOString(),
+        sequence: 1,
+      },
+      {
+        type: 'auction:closed',
+        auctionId: 'auction-1',
+        status: 'CLOSED',
+        closedAt: new Date(
+          PUBLISHED_AT.getTime() + 60 * 60 * 1000,
+        ).toISOString(),
+        winnerId: 'bidder-1',
+        paymentOrderId: 'payment-auction-1',
+        winningAmount: 100_000,
+      },
+    ]);
   });
 });

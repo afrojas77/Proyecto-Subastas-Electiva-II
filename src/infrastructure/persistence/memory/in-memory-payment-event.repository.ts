@@ -1,15 +1,17 @@
-import type { PaymentEvent } from '../../../domain/entities/payment-event';
-import type { PaymentEventRepository } from '../../../domain/ports/payment-event.repository';
+import type {
+  PaymentEventRepository,
+  ProcessedPaymentEvent,
+} from '../../../domain/ports/payment-event.repository';
 
 export class InMemoryPaymentEventRepository implements PaymentEventRepository {
-  private readonly paymentEvents = new Map<string, PaymentEvent>();
+  private readonly paymentEvents = new Map<string, ProcessedPaymentEvent>();
 
-  existsById(id: string): Promise<boolean> {
-    return Promise.resolve(this.paymentEvents.has(id));
+  findById(id: string): Promise<ProcessedPaymentEvent | undefined> {
+    return Promise.resolve(this.paymentEvents.get(id));
   }
 
-  save(paymentEvent: PaymentEvent): Promise<void> {
-    this.paymentEvents.set(paymentEvent.id, paymentEvent);
+  save(processedEvent: ProcessedPaymentEvent): Promise<void> {
+    this.paymentEvents.set(processedEvent.event.id, processedEvent);
     return Promise.resolve();
   }
 }
