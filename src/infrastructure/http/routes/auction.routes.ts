@@ -1,17 +1,20 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 
 import type { AuctionController } from '../controllers/auction.controller';
 
-export function createAuctionRouter(controller: AuctionController): Router {
+export function createAuctionRouter(
+  controller: AuctionController,
+  authenticate: RequestHandler,
+): Router {
   const router = Router();
 
   router.get('/', controller.list);
   router.get('/:id', controller.get);
-  router.post('/', controller.publish);
-  router.post('/:id/bids', controller.placeBid);
-  router.get('/:id/bids', controller.bidHistory);
-  router.post('/:id/cancel', controller.cancel);
-  router.post('/:id/close', controller.close);
+  router.post('/', authenticate, controller.publish);
+  router.post('/:id/bids', authenticate, controller.placeBid);
+  router.get('/:id/bids', authenticate, controller.bidHistory);
+  router.post('/:id/cancel', authenticate, controller.cancel);
+  router.post('/:id/close', authenticate, controller.close);
 
   return router;
 }

@@ -8,7 +8,11 @@ import { ListAuctions } from '../../../application/use-cases/list-auctions';
 import { PlaceBid } from '../../../application/use-cases/place-bid';
 import { PublishAuction } from '../../../application/use-cases/publish-auction';
 import { ConsoleLogger } from '../../logging/console-logger';
+import { getAuthenticatedUserId } from '../authentication-request';
 import {
+  rejectField,
+  optionalPositiveInteger,
+  optionalQueryString,
   requireBody,
   requireDate,
   requireNumber,
@@ -35,10 +39,11 @@ export class AuctionController {
 
   publish = async (request: Request, response: Response): Promise<void> => {
     const body = requireBody(request.body as unknown);
+    rejectField(body, 'sellerId');
     const article = requireBody(body.article);
     const auction = await this.publishAuction.execute({
       id: requireString(body, 'id'),
-      sellerId: requireString(body, 'sellerId'),
+      sellerId: getAuthenticatedUserId(request),
       article: {
         denomination: requireString(article, 'denomination'),
         description: requireString(article, 'description'),
@@ -61,25 +66,38 @@ export class AuctionController {
     response.status(200).json(presentAuction(auction));
   };
 
-  list = async (_request: Request, response: Response): Promise<void> => {
-    const auctions = await this.listAuctions.execute();
-    response.status(200).json({ auctions: auctions.map(presentAuction) });
+  list = async (request: Request, response: Response): Promise<void> => {
+    const result = await this.listAuctions.execute({
+      category: optionalQueryString(request.query.category, 'category'),
+      status: optionalQueryString(request.query.status, 'status'),
+      page: optionalPositiveInteger(request.query.page, 'page'),
+      limit: optionalPositiveInteger(request.query.limit, 'limit'),
+    });
+    response.status(200).json({
+      auctions: result.auctions.map(presentAuction),
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      totalPages: result.totalPages,
+    });
   };
 
   cancel = async (request: Request, response: Response): Promise<void> => {
-    const auction = await this.cancelAuction.execute(
-      requireRouteId(request.params.id),
-    );
+    const auction = await this.cancelAuction.execute({
+      auctionId: requireRouteId(request.params.id),
+      requesterId: getAuthenticatedUserId(request),
+    });
     response.status(200).json(presentAuction(auction));
   };
 
   placeBid = async (request: Request, response: Response): Promise<void> => {
     const body = requireBody(request.body as unknown);
+    rejectField(body, 'bidderId');
     const auctionId = requireRouteId(request.params.id);
     const bid = await this.placeBidUseCase.execute({
       id: requireString(body, 'id'),
       auctionId,
-      bidderId: requireString(body, 'bidderId'),
+      bidderId: getAuthenticatedUserId(request),
       amount: requireNumber(body, 'amount'),
     });
     this.logger.info('Puja aceptada', {
@@ -101,7 +119,10 @@ export class AuctionController {
 
   close = async (request: Request, response: Response): Promise<void> => {
     const auctionId = requireRouteId(request.params.id);
-    const closure = await this.closeAuction.execute(auctionId);
+    const closure = await this.closeAuction.execute({
+      auctionId,
+      requesterId: getAuthenticatedUserId(request),
+    });
     this.logger.info('Subasta cerrada', { auctionId });
     response.status(200).json(presentAuctionClosure(closure));
   };

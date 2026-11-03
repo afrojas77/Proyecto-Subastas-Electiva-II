@@ -9,6 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest",
+    "test:integration": "node --env-file=.env ./node_modules/jest/bin/jest.js --config jest.integration.config.ts --runInBand",
+    "test:socket": "jest --config jest.socket.config.ts --runInBand",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -17,19 +19,25 @@
     "node": ">=20"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mssql": "^12.7.13",
     "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^26.4.1",
     "@types/supertest": "^7.2.1",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.5.1",
     "prettier": "^3.9.6",
+    "socket.io-client": "^4.8.4",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.12",
     "tsx": "^4.23.13",

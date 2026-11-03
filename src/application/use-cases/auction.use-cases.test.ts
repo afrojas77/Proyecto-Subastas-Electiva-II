@@ -8,11 +8,13 @@ import type {
   RealtimeEvent,
   RealtimeEventPublisher,
 } from '../ports/realtime-event-publisher';
+import { AuthorizationError } from '../errors/authorization.error';
 import { CancelAuction } from './cancel-auction';
 import { CloseAuction } from './close-auction';
 import { GetAuction } from './get-auction';
 import { PlaceBid } from './place-bid';
 import { PublishAuction } from './publish-auction';
+import { ProcessAuctionClosure } from './process-auction-closure';
 
 class FixedClock implements Clock {
   constructor(private currentTime: Date) {}
@@ -42,6 +44,12 @@ function setup() {
   const paymentOrderRepository = new InMemoryPaymentOrderRepository();
   const clock = new FixedClock(PUBLISHED_AT);
   const realtimeEventPublisher = new RecordingRealtimeEventPublisher();
+  const processAuctionClosure = new ProcessAuctionClosure(
+    auctionRepository,
+    clock,
+    paymentOrderRepository,
+    realtimeEventPublisher,
+  );
   return {
     auctionRepository,
     paymentOrderRepository,
@@ -55,12 +63,7 @@ function setup() {
       clock,
       realtimeEventPublisher,
     ),
-    closeAuction: new CloseAuction(
-      auctionRepository,
-      clock,
-      paymentOrderRepository,
-      realtimeEventPublisher,
-    ),
+    closeAuction: new CloseAuction(auctionRepository, processAuctionClosure),
   };
 }
 
@@ -88,6 +91,7 @@ describe('casos de uso de subastas', () => {
     const auction = await context.getAuction.execute('auction-1');
 
     expect(auction.id).toBe('auction-1');
+    expect(auction.sellerId).toBe('seller-1');
     expect(auction.publishedAt).toEqual(PUBLISHED_AT);
   });
 
@@ -95,11 +99,30 @@ describe('casos de uso de subastas', () => {
     const context = setup();
     await publishDefaultAuction(context);
 
-    const auction = await context.cancelAuction.execute('auction-1');
+    const auction = await context.cancelAuction.execute({
+      auctionId: 'auction-1',
+      requesterId: 'seller-1',
+    });
 
     expect(auction.status.value).toBe('CANCELLED');
     expect((await context.getAuction.execute('auction-1')).status.value).toBe(
       'CANCELLED',
+    );
+  });
+
+  it('impide que otro usuario cancele la subasta', async () => {
+    const context = setup();
+    await publishDefaultAuction(context);
+
+    await expect(
+      context.cancelAuction.execute({
+        auctionId: 'auction-1',
+        requesterId: 'other-user',
+      }),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+
+    expect((await context.getAuction.execute('auction-1')).status.value).toBe(
+      'OPEN',
     );
   });
 
@@ -115,6 +138,7 @@ describe('casos de uso de subastas', () => {
     });
 
     expect(bid.id).toBe('bid-1');
+    expect(bid.bidderId).toBe('bidder-1');
     expect(
       (await context.getAuction.execute('auction-1')).acceptedBids,
     ).toHaveLength(1);
@@ -123,14 +147,44 @@ describe('casos de uso de subastas', () => {
         type: 'auction:bid-accepted',
         auctionId: 'auction-1',
         bidId: 'bid-1',
+        bidderId: 'bidder-1',
         amount: 100_000,
         placedAt: PUBLISHED_AT.toISOString(),
         sequence: 1,
       },
     ]);
-    expect(context.realtimeEventPublisher.events[0]).not.toHaveProperty(
-      'bidderId',
-    );
+  });
+
+  it('notifica en privado al líder anterior cuando otra puja lo supera', async () => {
+    const context = setup();
+    await publishDefaultAuction(context);
+    await context.placeBid.execute({
+      id: 'bid-1',
+      auctionId: 'auction-1',
+      bidderId: 'bidder-1',
+      amount: 100_000,
+    });
+
+    await context.placeBid.execute({
+      id: 'bid-2',
+      auctionId: 'auction-1',
+      bidderId: 'bidder-2',
+      amount: 110_000,
+    });
+
+    expect(context.realtimeEventPublisher.events).toContainEqual({
+      type: 'auction:bid-outbid',
+      auctionId: 'auction-1',
+      recipientUserId: 'bidder-1',
+      newBidId: 'bid-2',
+      currentAmount: 110_000,
+      occurredAt: PUBLISHED_AT.toISOString(),
+    });
+    expect(
+      context.realtimeEventPublisher.events.filter(
+        (event) => event.type === 'auction:bid-outbid',
+      ),
+    ).toHaveLength(1);
   });
 
   it('persiste el intento rechazado antes de propagar el error', async () => {
@@ -184,8 +238,9 @@ describe('casos de uso de subastas', () => {
     });
     context.clock.set(new Date(PUBLISHED_AT.getTime() + 60 * 60 * 1000));
 
-    const firstClosure = await context.closeAuction.execute('auction-1');
-    const secondClosure = await context.closeAuction.execute('auction-1');
+    const command = { auctionId: 'auction-1', requesterId: 'seller-1' };
+    const firstClosure = await context.closeAuction.execute(command);
+    const secondClosure = await context.closeAuction.execute(command);
 
     expect(firstClosure.paymentOrder?.id).toBe('payment-auction-1');
     expect(secondClosure).toBe(firstClosure);
@@ -197,6 +252,7 @@ describe('casos de uso de subastas', () => {
         type: 'auction:bid-accepted',
         auctionId: 'auction-1',
         bidId: 'bid-1',
+        bidderId: 'bidder-1',
         amount: 100_000,
         placedAt: PUBLISHED_AT.toISOString(),
         sequence: 1,
@@ -204,6 +260,32 @@ describe('casos de uso de subastas', () => {
       {
         type: 'auction:closed',
         auctionId: 'auction-1',
+        status: 'CLOSED',
+        closedAt: new Date(
+          PUBLISHED_AT.getTime() + 60 * 60 * 1000,
+        ).toISOString(),
+        winnerId: 'bidder-1',
+        paymentOrderId: 'payment-auction-1',
+        winningAmount: 100_000,
+      },
+      {
+        type: 'auction:result',
+        auctionId: 'auction-1',
+        recipientUserId: 'bidder-1',
+        recipientRole: 'WINNER',
+        status: 'CLOSED',
+        closedAt: new Date(
+          PUBLISHED_AT.getTime() + 60 * 60 * 1000,
+        ).toISOString(),
+        winnerId: 'bidder-1',
+        paymentOrderId: 'payment-auction-1',
+        winningAmount: 100_000,
+      },
+      {
+        type: 'auction:result',
+        auctionId: 'auction-1',
+        recipientUserId: 'seller-1',
+        recipientRole: 'SELLER',
         status: 'CLOSED',
         closedAt: new Date(
           PUBLISHED_AT.getTime() + 60 * 60 * 1000,

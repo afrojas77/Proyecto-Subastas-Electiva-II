@@ -6,14 +6,79 @@ info:
 servers:
   - url: http://localhost:3000
 paths:
-  /api/auctions:
-    get:
-      summary: Lista subastas
+  /api/users/register:
+    post:
+      summary: Registra un usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCredentials' }
+      responses:
+        '201':
+          description: Usuario registrado sin datos de credencial
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/auth/login:
+    post:
+      summary: Autentica un usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCredentials' }
       responses:
         '200':
-          description: Lista disponible
+          description: Token Bearer emitido correctamente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/users/me:
+    get:
+      summary: Consulta el perfil del usuario autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Perfil propio sin hash de contraseña
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/auctions:
+    get:
+      summary: Lista subastas con filtros y paginación
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+          description: Nombre exacto de la categoría.
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, CANCELLED, CLOSED, DESERTED, DEFAULTED]
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Página de subastas y metadatos del resultado filtrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuctionPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     post:
       summary: Publica una subasta
+      description: El vendedor se obtiene exclusivamente del token. Enviar sellerId en el cuerpo produce un error 400.
+      security: [{ bearerAuth: [] }]
       requestBody:
         required: true
         content:
@@ -23,22 +88,28 @@ paths:
       responses:
         '201': { description: Subasta publicada }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /api/auctions/{id}:
     get:
       summary: Consulta una subasta
+      description: Si la subasta sigue abierta y el instante actual alcanzó closesAt, la cierra, adjudica y persiste la orden antes de responder.
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
         '200': { description: Subasta encontrada }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/auctions/{id}/bids:
     get:
-      summary: Consulta el historial público de pujas
+      summary: Consulta el historial de pujas como usuario registrado
+      security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
         '200': { description: Historial sin datos de contacto }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       summary: Registra una puja
+      description: El postor se obtiene exclusivamente del token. Enviar bidderId en el cuerpo produce un error 400. Si closesAt ya fue alcanzado, primero se cierra la subasta y la puja tardía se rechaza con AUCTION_NOT_OPEN.
+      security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       requestBody:
         required: true
@@ -49,21 +120,30 @@ paths:
       responses:
         '201': { description: Puja aceptada }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/auctions/{id}/cancel:
     post:
       summary: Cancela una subasta sin pujas
+      description: Sólo el vendedor autenticado propietario puede cancelar.
+      security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
         '200': { description: Subasta cancelada }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /api/auctions/{id}/close:
     post:
-      summary: Cierra una subasta y devuelve su resultado
+      summary: Cierra manualmente una subasta como vendedor
+      description: Operación idempotente conservada por compatibilidad. Sólo el vendedor autenticado puede ejecutarla y nunca permite cerrar antes de closesAt.
+      security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
         '200': { description: Resultado de cierre idempotente }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /api/payments/webhook:
@@ -92,7 +172,31 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/payment-orders/{id}:
+    get:
+      summary: Consulta una orden de pago como ganador
+      description: La identidad se obtiene exclusivamente del token y debe coincidir con el deudor ganador de la orden.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Orden propia sin información privada adicional
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentOrder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   parameters:
     AuctionId:
       name: id
@@ -100,13 +204,36 @@ components:
       required: true
       schema: { type: string }
   schemas:
+    UserCredentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Entre 8 caracteres y 72 bytes; nunca se devuelve.
+    UserProfile:
+      type: object
+      required: [id, email]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+    LoginResponse:
+      type: object
+      required: [accessToken, tokenType, expiresAt, user]
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresAt: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/UserProfile' }
     PublishAuctionRequest:
       type: object
       required:
-        [id, sellerId, article, category, basePrice, minimumIncrement, closesAt]
+        [id, article, category, basePrice, minimumIncrement, closesAt]
       properties:
         id: { type: string }
-        sellerId: { type: string }
         article:
           type: object
           required: [denomination, description, conservationState]
@@ -121,11 +248,47 @@ components:
         closesAt: { type: string, format: date-time }
     PlaceBidRequest:
       type: object
-      required: [id, bidderId, amount]
+      required: [id, amount]
       properties:
         id: { type: string }
-        bidderId: { type: string }
         amount: { type: integer, minimum: 0 }
+    AuctionSummary:
+      type: object
+      required:
+        [id, sellerId, article, category, basePrice, minimumIncrement, publishedAt, closesAt, status]
+      properties:
+        id: { type: string }
+        sellerId: { type: string }
+        article: { type: object }
+        category: { type: string }
+        basePrice: { type: integer, minimum: 0 }
+        minimumIncrement: { type: integer, minimum: 0 }
+        publishedAt: { type: string, format: date-time }
+        closesAt: { type: string, format: date-time }
+        status:
+          { type: string, enum: [OPEN, CANCELLED, CLOSED, DESERTED, DEFAULTED] }
+        winnerId: { type: string, nullable: true }
+    AuctionPage:
+      type: object
+      required: [auctions, page, limit, total, totalPages]
+      properties:
+        auctions:
+          type: array
+          items: { $ref: '#/components/schemas/AuctionSummary' }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    PaymentOrder:
+      type: object
+      required: [id, auctionId, amount, status, createdAt, dueAt]
+      properties:
+        id: { type: string }
+        auctionId: { type: string }
+        amount: { type: integer, minimum: 0 }
+        status: { type: string, enum: [PENDING, PAID, EXPIRED] }
+        createdAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time }
     PaymentNotificationRequest:
       type: object
       required: [id, paymentOrderId, result, occurredAt]
@@ -164,6 +327,10 @@ components:
       content:
         { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     Unauthorized:
-      description: No se pudo verificar el origen de la notificación
+      description: Token o credenciales inválidos, u origen no verificado
+      content:
+        { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Usuario autenticado sin permiso sobre el recurso
       content:
         { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

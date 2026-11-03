@@ -11,6 +11,12 @@ export class InMemoryUserRepository implements UserRepository {
     );
   }
 
+  findByEmail(email: Email): Promise<User | undefined> {
+    return Promise.resolve(
+      [...this.users.values()].find((user) => user.email.equals(email)),
+    );
+  }
+
   findById(id: string): Promise<User | undefined> {
     return Promise.resolve(this.users.get(id));
   }

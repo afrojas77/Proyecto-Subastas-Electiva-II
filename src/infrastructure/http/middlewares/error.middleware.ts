@@ -1,5 +1,11 @@
 import type { NextFunction, Request, Response } from 'express';
 
+import { AuthenticationRequiredError } from '../../../application/errors/authentication-required.error';
+import { AuthorizationError } from '../../../application/errors/authorization.error';
+import { DuplicateEmailError } from '../../../application/errors/duplicate-email.error';
+import { InvalidCredentialsError } from '../../../application/errors/invalid-credentials.error';
+import { InvalidPasswordError } from '../../../application/errors/invalid-password.error';
+import { InvalidPaginationError } from '../../../application/errors/invalid-pagination.error';
 import { InvalidPaymentNotificationError } from '../../../application/errors/invalid-payment-notification.error';
 import { PaymentEventConflictError } from '../../../application/errors/payment-event-conflict.error';
 import { ResourceNotFoundError } from '../../../application/errors/resource-not-found.error';
@@ -26,6 +32,29 @@ export function createErrorMiddleware(logger: ConsoleLogger) {
     next: NextFunction,
   ): void => {
     void next;
+    if (
+      error instanceof AuthenticationRequiredError ||
+      error instanceof InvalidCredentialsError
+    ) {
+      sendError(response, 401, 'UNAUTHORIZED', error.message);
+      return;
+    }
+    if (error instanceof DuplicateEmailError) {
+      sendError(response, 409, 'DUPLICATE_EMAIL', error.message);
+      return;
+    }
+    if (error instanceof AuthorizationError) {
+      sendError(response, 403, 'FORBIDDEN', error.message);
+      return;
+    }
+    if (error instanceof InvalidPasswordError) {
+      sendError(response, 400, 'INVALID_PASSWORD', error.message);
+      return;
+    }
+    if (error instanceof InvalidPaginationError) {
+      sendError(response, 400, 'INVALID_PAGINATION', error.message);
+      return;
+    }
     if (error instanceof ResourceNotFoundError) {
       sendError(response, 404, 'RESOURCE_NOT_FOUND', error.message);
       return;

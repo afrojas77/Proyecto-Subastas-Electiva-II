@@ -27,6 +27,14 @@ export function requireNumber(body: HttpBody, field: string): number {
   return value;
 }
 
+export function rejectField(body: HttpBody, field: string): void {
+  if (Object.prototype.hasOwnProperty.call(body, field)) {
+    throw new HttpValidationError(
+      `${field} no debe enviarse; la identidad se obtiene del token.`,
+    );
+  }
+}
+
 export function requireDate(body: HttpBody, field: string): Date {
   const value = requireString(body, field);
   const date = new Date(value);
@@ -41,4 +49,34 @@ export function requireRouteId(value: unknown): string {
     throw new HttpValidationError('id de recurso inválido.');
   }
   return value;
+}
+
+export function optionalQueryString(
+  value: unknown,
+  field: string,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new HttpValidationError(`${field} debe ser texto no vacío.`);
+  }
+  return value;
+}
+
+export function optionalPositiveInteger(
+  value: unknown,
+  field: string,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    throw new HttpValidationError(`${field} debe ser un entero positivo.`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new HttpValidationError(`${field} debe ser un entero positivo.`);
+  }
+  return parsed;
 }

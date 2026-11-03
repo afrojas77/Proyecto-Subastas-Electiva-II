@@ -7,6 +7,10 @@ const config: Config = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   testMatch: ['**/*.test.ts'],
+  testPathIgnorePatterns: [
+    '\\.integration\\.test\\.ts$',
+    '\\.socket\\.test\\.ts$',
+  ],
 };
 
 export default config;
