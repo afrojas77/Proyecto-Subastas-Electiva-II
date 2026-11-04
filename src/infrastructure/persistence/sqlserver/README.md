@@ -40,11 +40,15 @@ Ejecuta `database/schema.sql` sobre una instalación nueva. Para una base creada
 
 Los mapeadores usan `Auction.restore()` y `PaymentOrder.restore()`; no simulan publicación, pujas, cierre ni transiciones. Todas las entradas dinámicas se envían como parámetros `mssql`. La lectura y escritura del agregado `Auction` se ejecutan dentro de una transacción `SERIALIZABLE` para evitar snapshots parciales entre sus tablas.
 
-`payment_events.id` es la clave de idempotencia persistente. Un ID duplicado queda protegido por la clave primaria; el caso de uso recupera la respuesta original cuando el contenido coincide. La resolución atómica de dos webhooks concurrentes y la traducción de una colisión SQL a la respuesta previa requieren todavía una transacción de aplicación o procedimiento almacenado.
+`auctions.version` implementa control optimista de concurrencia. Cada agregado restaurado conserva su versión únicamente en el adaptador SQL; el dominio no conoce SQL Server ni campos técnicos de persistencia. El guardado actualiza la fila solamente si la versión no cambió y, ante un conflicto, no reemplaza las pujas persistidas. `PlaceBid` vuelve a leer y evaluar la oferta hasta tres veces, por lo que dos solicitudes simultáneas se ordenan según el estado que realmente quedó guardado. El repositorio en memoria sigue sin ofrecer esta garantía y se conserva como doble simple para pruebas unitarias.
+
+`payment_events.id` es la clave de idempotencia persistente. `SqlPersistenceTransaction` adquiere bloqueos de aplicación con propietario transaccional, ordenados por nombre, antes de entregar repositorios ligados al mismo ejecutor. Dos webhooks sobre el mismo evento u orden se serializan: el primero actualiza orden y evento atómicamente y el segundo recupera la respuesta original cuando el contenido coincide.
 
 ## Límites transaccionales
 
-Las transacciones actuales cubren una operación de `SqlAuctionRepository`, no varios repositorios. `CloseAuction`, `ProcessPaymentNotification` y `ProcessPaymentOrderExpiration` realizan escrituras independientes, y la publicación Socket.IO ocurre después. Por tanto, todavía pueden existir estados parciales. La evolución recomendada es una unidad de trabajo SQL que incluya las escrituras coordinadas y una tabla outbox para los eventos en tiempo real.
+`ProcessAuctionClosure`, `ProcessPaymentNotification` y `ProcessPaymentOrderExpiration` utilizan la frontera `PersistenceTransaction`. Sus repositorios internos no abren transacciones independientes: operan con el mismo ejecutor `SERIALIZABLE`, de modo que un error revierte todas las tablas del flujo. Los bloqueos lógicos se limitan a la subasta, orden o evento implicado y se liberan al confirmar o revertir.
+
+Socket.IO permanece fuera de la transacción SQL. Los eventos se emiten sólo después del commit, pero no existe outbox ni entrega durable: una caída entre el commit y la emisión puede perder la notificación, y un error de transporte no revierte los datos ya confirmados.
 
 El listado de subastas aplica categoría, estado, conteo y `OFFSET/FETCH` directamente en SQL mediante parámetros. El orden estable por `published_at, id` permite recorrer páginas de forma determinista; sólo se reconstruyen los agregados incluidos en la página solicitada. El esquema crea un índice compuesto para esta consulta.
 
@@ -93,8 +97,7 @@ las filas cuyo identificador comienza por `it` y elimina únicamente las que
 pertenezcan a la ejecución, respetando este orden: eventos, cierres, órdenes,
 intentos rechazados, pujas, subastas y usuarios.
 
-La prueba de rollback demuestra atomicidad únicamente dentro de
-`SqlAuctionRepository`. Siguen pendientes una unidad de trabajo compartida para
-confirmar un pago, registrar su evento y actualizar la orden; otra para vencer la
-orden y marcar la subasta como `DEFAULTED`; y una estrategia outbox para coordinar
-la persistencia con Socket.IO.
+Las pruebas reales demuestran rollback del agregado y del cierre con su orden,
+serialización de cierres, vencimiento coherente y webhooks duplicados concurrentes.
+Sigue pendiente una estrategia outbox para coordinar la persistencia con
+Socket.IO.

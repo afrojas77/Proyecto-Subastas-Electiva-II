@@ -41,6 +41,7 @@ describe('mapeadores SQL Server', () => {
       published_at: PUBLISHED_AT,
       closes_at: CLOSES_AT,
       status: 'CLOSED',
+      version: 0,
       closure_id: 'auction-1',
       winning_bid_id: 'bid-2',
     };

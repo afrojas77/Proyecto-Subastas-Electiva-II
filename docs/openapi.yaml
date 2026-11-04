@@ -86,7 +86,11 @@ paths:
             schema:
               $ref: '#/components/schemas/PublishAuctionRequest'
       responses:
-        '201': { description: Subasta publicada }
+        '201':
+          description: Subasta publicada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuctionSummary' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
   /api/auctions/{id}:
@@ -95,7 +99,11 @@ paths:
       description: Si la subasta sigue abierta y el instante actual alcanzó closesAt, la cierra, adjudica y persiste la orden antes de responder.
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
-        '200': { description: Subasta encontrada }
+        '200':
+          description: Subasta encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuctionSummary' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/auctions/{id}/bids:
     get:
@@ -103,7 +111,11 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
-        '200': { description: Historial sin datos de contacto }
+        '200':
+          description: Historial sin datos de contacto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BidHistory' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
@@ -118,10 +130,15 @@ paths:
             schema:
               $ref: '#/components/schemas/PlaceBidRequest'
       responses:
-        '201': { description: Puja aceptada }
+        '201':
+          description: Puja aceptada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bid' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/auctions/{id}/cancel:
     post:
       summary: Cancela una subasta sin pujas
@@ -129,7 +146,11 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
-        '200': { description: Subasta cancelada }
+        '200':
+          description: Subasta cancelada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuctionSummary' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -141,7 +162,11 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
-        '200': { description: Resultado de cierre idempotente }
+        '200':
+          description: Resultado de cierre idempotente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuctionClosure' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -243,8 +268,8 @@ components:
             conservationState:
               { type: string, enum: [NEW, LIKE_NEW, USED, RESTORED] }
         category: { type: string }
-        basePrice: { type: integer, minimum: 0 }
-        minimumIncrement: { type: integer, minimum: 0 }
+        basePrice: { type: integer, minimum: 1 }
+        minimumIncrement: { type: integer, minimum: 1 }
         closesAt: { type: string, format: date-time }
     PlaceBidRequest:
       type: object
@@ -279,6 +304,37 @@ components:
         limit: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }
         totalPages: { type: integer, minimum: 0 }
+    Bid:
+      type: object
+      required: [id, bidderId, amount, placedAt, sequence]
+      properties:
+        id: { type: string }
+        bidderId: { type: string }
+        amount: { type: integer, minimum: 0 }
+        placedAt: { type: string, format: date-time }
+        sequence: { type: integer, minimum: 1 }
+    BidHistory:
+      type: object
+      required: [auctionId, bids]
+      properties:
+        auctionId: { type: string }
+        bids:
+          type: array
+          items: { $ref: '#/components/schemas/Bid' }
+    AuctionClosure:
+      type: object
+      required: [auctionId, status]
+      properties:
+        auctionId: { type: string }
+        status: { type: string, enum: [CLOSED, DESERTED, DEFAULTED] }
+        winnerId: { type: string, nullable: true }
+        winningBid: { $ref: '#/components/schemas/Bid' }
+        paymentOrder:
+          allOf:
+            - { $ref: '#/components/schemas/PaymentOrder' }
+            - type: object
+              properties:
+                debtorId: { type: string }
     PaymentOrder:
       type: object
       required: [id, auctionId, amount, status, createdAt, dueAt]

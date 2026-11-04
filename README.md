@@ -104,7 +104,7 @@ Los contratos de `src/domain/ports` expresan las necesidades de persistencia sin
 
 Implementadas en Domain y demostradas desde Application/API: RN-01 a RN-16 y RN-21. `PlaceBid` coordina RN-12: guarda la subasta aun cuando el dominio rechaza una puja, preservando el intento de auditoría.
 
-RN-17 a RN-19 se demuestran con un webhook y un verificador de secreto compartido exclusivo de desarrollo. La persistencia en memoria reproduce respuestas en reintentos secuenciales, pero no garantiza idempotencia atómica concurrente. RN-20 dispone de transición y caso de uso para procesar una orden identificada; todavía falta invocarlo desde un flujo de entrada. RN-22 se protege en registro mediante consulta normalizada y restricción SQL única. RN-23 exige autenticación para el historial de pujas, que continúa sin exponer datos de contacto.
+RN-17 a RN-19 se demuestran con un webhook y un verificador de secreto compartido exclusivo de desarrollo. SQL Server serializa por evento y orden los webhooks concurrentes, conserva una sola respuesta y actualiza orden y evento en la misma transacción; la persistencia en memoria sólo reproduce reintentos secuenciales. RN-20 dispone de transición y caso de uso para procesar una orden identificada; todavía falta invocarlo desde un flujo de entrada. RN-22 se protege en registro mediante consulta normalizada y restricción SQL única. RN-23 exige autenticación para el historial de pujas, que continúa sin exponer datos de contacto.
 
 SQL Server refuerza RN-21 con columnas `BIGINT` y restricciones de rango, y RN-22 mediante una restricción única de correo sin distinción entre mayúsculas y minúsculas. Los usuarios se registran mediante `POST /api/users/register`; las filas anteriores a autenticación siguen siendo referencias válidas, pero no pueden iniciar sesión mientras no tengan un hash asociado.
 
@@ -122,15 +122,18 @@ Las salas de subasta reciben `auction:bid-accepted`, `auction:closed`, `payment:
 
 Los eventos se emiten después de las escrituras de aplicación y no contienen correos, contraseñas, datos de contacto ni información de verificación del webhook. La implementación actual no ofrece outbox, reintentos ni entrega exactamente una vez; una caída entre persistencia y publicación puede perder el evento.
 
+En SQL Server, el cierre y su orden, el vencimiento y el incumplimiento, y la confirmación con su evento se confirman o revierten juntos. `sp_getapplock`, con propietario transaccional, serializa operaciones sobre la misma subasta, orden o evento. Esta garantía no incluye Socket.IO ni se reproduce en los repositorios en memoria.
+
 ## SQL Server
 
 1. Crea la base local `SubastasDB`.
-2. Ejecuta `database/schema.sql` desde SQL Server Management Studio, Azure Data Studio o `sqlcmd` contra esa base.
-   Si la base ya existía, puede ejecutarse solamente `database/migrations/002_add_user_password_hash.sql`.
+2. Ejecuta `database/schema.sql` desde SQL Server Management Studio, Azure Data Studio o `sqlcmd` contra esa base. El script es incremental y agrega las columnas ausentes en una instalación existente.
 3. Copia los nombres de `.env.example` a variables de entorno locales y reemplaza sólo localmente usuario y contraseña.
 4. Define `PERSISTENCE=sqlserver` y arranca la aplicación.
 
 El proceso crea un único pool compartido y lo cierra junto con Socket.IO al recibir `SIGINT` o `SIGTERM`. Si falta configuración o falla la conexión, el inicio termina con un error claro y no cambia silenciosamente a memoria. Consulta `src/infrastructure/persistence/sqlserver/README.md` para el diseño, las relaciones y las limitaciones.
+
+Las pujas concurrentes sobre SQL Server usan la versión técnica del agregado. Una escritura obsoleta se rechaza antes de reemplazar el historial y `PlaceBid` vuelve a leer y evaluar la oferta de forma acotada. La suite de integración ejecuta dos pujas simultáneas para comprobar que no exista una actualización perdida.
 
 Para las pruebas de integración se reutiliza la base académica `SubastasDB`,
 dedicada exclusivamente a este proyecto. La suite aplica `database/schema.sql`

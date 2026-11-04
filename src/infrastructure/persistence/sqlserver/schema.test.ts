@@ -15,6 +15,8 @@ describe('esquema SQL Server', () => {
     expect(schema).toContain('base_price BIGINT NOT NULL');
     expect(schema).toContain('amount BIGINT NOT NULL');
     expect(schema).toContain('9007199254740991');
+    expect(schema).toContain('version BIGINT NOT NULL');
+    expect(schema).toContain("COL_LENGTH(N'dbo.auctions', N'version')");
   });
 
   it('define relaciones e índices de idempotencia y vencimiento', () => {

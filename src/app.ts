@@ -18,6 +18,7 @@ import { RegisterUser } from './application/use-cases/register-user';
 import type { PaymentNotificationVerifier } from './application/ports/payment-notification-verifier';
 import type { PasswordHasher } from './application/ports/password-hasher';
 import type { RealtimeEventPublisher } from './application/ports/realtime-event-publisher';
+import type { PersistenceTransaction } from './application/ports/persistence-transaction';
 import type { AuctionRepository } from './domain/ports/auction.repository';
 import type { Clock } from './domain/ports/clock';
 import type { PaymentEventRepository } from './domain/ports/payment-event.repository';
@@ -58,6 +59,7 @@ export interface AppDependencies {
   paymentEventRepository?: PaymentEventRepository;
   paymentNotificationVerifier?: PaymentNotificationVerifier;
   paymentOrderRepository?: PaymentOrderRepository;
+  persistenceTransaction?: PersistenceTransaction;
   userRepository?: UserRepository;
 }
 
@@ -85,6 +87,7 @@ export function createApp(dependencies: AppDependencies) {
     clock,
     paymentOrderRepository,
     dependencies.realtimeEventPublisher,
+    dependencies.persistenceTransaction,
   );
   const auctionController = new AuctionController(
     new PublishAuction(auctionRepository, clock),
@@ -107,6 +110,7 @@ export function createApp(dependencies: AppDependencies) {
       paymentOrderRepository,
       paymentEventRepository,
       dependencies.realtimeEventPublisher,
+      dependencies.persistenceTransaction,
     ),
   );
   const paymentOrderController = new PaymentOrderController(

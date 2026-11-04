@@ -9,6 +9,7 @@ import { PaymentEventConflictError } from '../errors/payment-event-conflict.erro
 import { ResourceNotFoundError } from '../errors/resource-not-found.error';
 import { UnverifiedPaymentNotificationError } from '../errors/unverified-payment-notification.error';
 import type { PaymentNotificationVerifier } from '../ports/payment-notification-verifier';
+import type { PersistenceTransaction } from '../ports/persistence-transaction';
 import type { RealtimeEventPublisher } from '../ports/realtime-event-publisher';
 
 export interface ProcessPaymentNotificationCommand {
@@ -23,12 +24,19 @@ interface PaymentNotificationData {
   occurredAt: Date;
 }
 
+interface PaymentNotificationProcessingResult {
+  response: PaymentProcessingResponse;
+  confirmedEvent?: PaymentEvent;
+  auctionId?: string;
+}
+
 export class ProcessPaymentNotification {
   constructor(
     private readonly verifier: PaymentNotificationVerifier,
     private readonly paymentOrderRepository: PaymentOrderRepository,
     private readonly paymentEventRepository: PaymentEventRepository,
     private readonly realtimeEventPublisher: RealtimeEventPublisher,
+    private readonly persistenceTransaction?: PersistenceTransaction,
   ) {}
 
   async execute(
@@ -44,17 +52,59 @@ export class ProcessPaymentNotification {
 
     const data = parseNotification(command.payload);
     const contentKey = createContentKey(data);
-    const previousProcessing = await this.paymentEventRepository.findById(
-      data.id,
-    );
+    const process = (
+      paymentOrderRepository: PaymentOrderRepository,
+      paymentEventRepository: PaymentEventRepository,
+    ) =>
+      this.processVerifiedNotification(
+        data,
+        contentKey,
+        verification.verificationData,
+        paymentOrderRepository,
+        paymentEventRepository,
+      );
+    const processing = this.persistenceTransaction
+      ? await this.persistenceTransaction.execute(
+          [`payment-event:${data.id}`, `payment-order:${data.paymentOrderId}`],
+          (repositories) =>
+            process(
+              repositories.paymentOrderRepository,
+              repositories.paymentEventRepository,
+            ),
+        )
+      : await process(
+          this.paymentOrderRepository,
+          this.paymentEventRepository,
+        );
+    if (processing.confirmedEvent && processing.auctionId) {
+      await this.realtimeEventPublisher.publish({
+        type: 'payment:confirmed',
+        auctionId: processing.auctionId,
+        paymentOrderId: processing.confirmedEvent.paymentOrderId,
+        paymentEventId: processing.confirmedEvent.id,
+        occurredAt: processing.confirmedEvent.occurredAt.toISOString(),
+        orderStatus: 'PAID',
+      });
+    }
+    return processing.response;
+  }
+
+  private async processVerifiedNotification(
+    data: PaymentNotificationData,
+    contentKey: string,
+    verificationData: string,
+    paymentOrderRepository: PaymentOrderRepository,
+    paymentEventRepository: PaymentEventRepository,
+  ): Promise<PaymentNotificationProcessingResult> {
+    const previousProcessing = await paymentEventRepository.findById(data.id);
     if (previousProcessing) {
       if (previousProcessing.contentKey !== contentKey) {
         throw new PaymentEventConflictError(data.id);
       }
-      return previousProcessing.response;
+      return { response: previousProcessing.response };
     }
 
-    const paymentOrder = await this.paymentOrderRepository.findById(
+    const paymentOrder = await paymentOrderRepository.findById(
       data.paymentOrderId,
     );
     if (!paymentOrder) {
@@ -66,11 +116,11 @@ export class ProcessPaymentNotification {
       data.paymentOrderId,
       data.result,
       data.occurredAt,
-      verification.verificationData,
+      verificationData,
     );
     if (paymentEvent.result === 'APPROVED') {
       paymentOrder.confirmWithVerifiedEvent(paymentEvent);
-      await this.paymentOrderRepository.save(paymentOrder);
+      await paymentOrderRepository.save(paymentOrder);
     }
 
     const response = Object.freeze({
@@ -79,22 +129,18 @@ export class ProcessPaymentNotification {
       result: paymentEvent.result,
       orderStatus: paymentOrder.status,
     });
-    await this.paymentEventRepository.save({
+    await paymentEventRepository.save({
       event: paymentEvent,
       contentKey,
       response,
     });
-    if (paymentEvent.result === 'APPROVED') {
-      await this.realtimeEventPublisher.publish({
-        type: 'payment:confirmed',
-        auctionId: paymentOrder.auctionId,
-        paymentOrderId: paymentOrder.id,
-        paymentEventId: paymentEvent.id,
-        occurredAt: paymentEvent.occurredAt.toISOString(),
-        orderStatus: 'PAID',
-      });
-    }
-    return response;
+    return {
+      response,
+      confirmedEvent:
+        paymentEvent.result === 'APPROVED' ? paymentEvent : undefined,
+      auctionId:
+        paymentEvent.result === 'APPROVED' ? paymentOrder.auctionId : undefined,
+    };
   }
 }
 

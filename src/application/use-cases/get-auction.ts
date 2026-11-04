@@ -14,7 +14,14 @@ export class GetAuction {
     if (!auction) {
       throw new ResourceNotFoundError('Subasta', id);
     }
-    await this.processAuctionClosure?.executeIfDue(auction);
+    const closure = await this.processAuctionClosure?.executeIfDue(auction);
+    if (closure && !auction.closure) {
+      const updatedAuction = await this.auctionRepository.findById(id);
+      if (!updatedAuction) {
+        throw new ResourceNotFoundError('Subasta', id);
+      }
+      return updatedAuction;
+    }
     return auction;
   }
 }

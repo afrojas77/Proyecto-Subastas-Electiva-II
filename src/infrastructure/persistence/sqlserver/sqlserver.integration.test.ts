@@ -8,9 +8,16 @@ import { LoginUser } from '../../../application/use-cases/login-user';
 import { GetAuction } from '../../../application/use-cases/get-auction';
 import { GetPaymentOrder } from '../../../application/use-cases/get-payment-order';
 import { ProcessAuctionClosure } from '../../../application/use-cases/process-auction-closure';
+import { PlaceBid } from '../../../application/use-cases/place-bid';
+import { ProcessPaymentNotification } from '../../../application/use-cases/process-payment-notification';
+import { ProcessPaymentOrderExpiration } from '../../../application/use-cases/process-payment-order-expiration';
 import { RegisterUser } from '../../../application/use-cases/register-user';
 import { AuthorizationError } from '../../../application/errors/authorization.error';
-import type { RealtimeEvent } from '../../../application/ports/realtime-event-publisher';
+import { UnverifiedPaymentNotificationError } from '../../../application/errors/unverified-payment-notification.error';
+import type {
+  RealtimeEvent,
+  RealtimeEventPublisher,
+} from '../../../application/ports/realtime-event-publisher';
 import { Auction } from '../../../domain/entities/auction';
 import { Bid } from '../../../domain/entities/bid';
 import { PaymentEvent } from '../../../domain/entities/payment-event';
@@ -23,6 +30,12 @@ import {
   RejectedBidReason,
 } from '../../../domain/entities/rejected-bid-attempt';
 import { User } from '../../../domain/entities/user';
+import { BidRejectedError } from '../../../domain/errors/bid-rejected.error';
+import type {
+  AuctionPage,
+  AuctionPageQuery,
+  AuctionRepository,
+} from '../../../domain/ports/auction.repository';
 import type { ProcessedPaymentEvent } from '../../../domain/ports/payment-event.repository';
 import { Article } from '../../../domain/value-objects/article';
 import { AuctionStatus } from '../../../domain/value-objects/auction-status';
@@ -34,6 +47,7 @@ import { JwtAccessTokenService } from '../../auth/jwt-access-token-service';
 import { SqlAuctionRepository } from './sql-auction.repository';
 import { SqlPaymentEventRepository } from './sql-payment-event.repository';
 import { SqlPaymentOrderRepository } from './sql-payment-order.repository';
+import { SqlPersistenceTransaction } from './sql-persistence-transaction';
 import { SqlUserRepository } from './sql-user.repository';
 import { loadSqlServerConfig } from './sqlserver-config';
 import { SqlServerDatabase } from './sqlserver-database';
@@ -50,6 +64,7 @@ let auctionRepository: SqlAuctionRepository;
 let orderRepository: SqlPaymentOrderRepository;
 let eventRepository: SqlPaymentEventRepository;
 let userRepository: SqlUserRepository;
+let persistenceTransaction: SqlPersistenceTransaction;
 
 describe('persistencia real en SQL Server', () => {
   beforeAll(async () => {
@@ -63,6 +78,7 @@ describe('persistencia real en SQL Server', () => {
       orderRepository = new SqlPaymentOrderRepository(database);
       eventRepository = new SqlPaymentEventRepository(database);
       userRepository = new SqlUserRepository(database);
+      persistenceTransaction = new SqlPersistenceTransaction(database);
       await seedRelationalUsers();
     } catch (error: unknown) {
       await database.close();
@@ -174,6 +190,7 @@ describe('persistencia real en SQL Server', () => {
           return Promise.resolve();
         },
       },
+      persistenceTransaction,
     );
     const getAuction = new GetAuction(auctionRepository, processor);
 
@@ -189,6 +206,257 @@ describe('persistencia real en SQL Server', () => {
     expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
       1,
     );
+  });
+
+  it('persiste como desierta una subasta sin pujas y no crea orden', async () => {
+    const auction = openAuction('deserted-closure');
+    await auctionRepository.save(auction);
+    const events: RealtimeEvent[] = [];
+    const processor = new ProcessAuctionClosure(
+      auctionRepository,
+      { now: () => auction.closesAt },
+      orderRepository,
+      {
+        publish: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+      },
+      persistenceTransaction,
+    );
+
+    const closure = await processor.execute(auction);
+
+    expect(closure.status).toBe(AuctionStatus.DESERTED);
+    expect(closure.paymentOrder).toBeUndefined();
+    expect(
+      await orderRepository.findById(`payment-${auction.id}`),
+    ).toBeUndefined();
+    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('revierte el cierre si falla la orden y permite reintentarlo', async () => {
+    const auction = openAuctionWithBid('closure-rollback');
+    await auctionRepository.save(auction);
+    const blockingOrder = PaymentOrder.create(
+      id('closure-rollback-existing-order'),
+      auction.id,
+      BIDDER_ONE_ID,
+      new Money(100_000),
+      auction.closesAt,
+    );
+    await orderRepository.save(blockingOrder);
+    const events: RealtimeEvent[] = [];
+    const processor = new ProcessAuctionClosure(
+      auctionRepository,
+      { now: () => auction.closesAt },
+      orderRepository,
+      {
+        publish: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+      },
+      persistenceTransaction,
+    );
+
+    await expect(processor.execute(auction)).rejects.toBeDefined();
+    const rolledBack = await auctionRepository.findById(auction.id);
+    expect(rolledBack?.status).toBe(AuctionStatus.OPEN);
+    expect(rolledBack?.closure).toBeUndefined();
+    expect(events).toHaveLength(0);
+
+    await deletePaymentOrder(blockingOrder.id);
+    const closure = await processor.execute(rolledBack as Auction);
+    expect(closure.paymentOrder?.id).toBe(`payment-${auction.id}`);
+    expect((await auctionRepository.findById(auction.id))?.status).toBe(
+      AuctionStatus.CLOSED,
+    );
+    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('serializa dos cierres y crea una sola orden y un solo evento', async () => {
+    const auction = openAuctionWithBid('concurrent-closure');
+    await auctionRepository.save(auction);
+    const firstSnapshot = await auctionRepository.findById(auction.id);
+    const secondSnapshot = await auctionRepository.findById(auction.id);
+    const events: RealtimeEvent[] = [];
+    const processor = new ProcessAuctionClosure(
+      auctionRepository,
+      { now: () => auction.closesAt },
+      orderRepository,
+      {
+        publish: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+      },
+      persistenceTransaction,
+    );
+
+    const closures = await Promise.all([
+      processor.execute(firstSnapshot as Auction),
+      processor.execute(secondSnapshot as Auction),
+    ]);
+
+    expect(closures[0]?.paymentOrder?.id).toBe(`payment-${auction.id}`);
+    expect(closures[1]?.paymentOrder?.id).toBe(`payment-${auction.id}`);
+    expect(await orderRepository.findById(`payment-${auction.id}`)).toBeDefined();
+    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('vence orden y subasta atómicamente y tolera el reintento', async () => {
+    const { auction, order } = closedAuction('expiration', 'PENDING');
+    await auctionRepository.save(auction);
+    await orderRepository.save(order);
+    const events: RealtimeEvent[] = [];
+    const processor = new ProcessPaymentOrderExpiration(
+      orderRepository,
+      auctionRepository,
+      { now: () => order.dueAt },
+      {
+        publish: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+      },
+      persistenceTransaction,
+    );
+
+    await expect(processor.execute(order.id)).resolves.toMatchObject({
+      outcome: 'PROCESSED',
+      orderStatus: 'EXPIRED',
+      auctionStatus: 'DEFAULTED',
+    });
+    await expect(processor.execute(order.id)).resolves.toMatchObject({
+      outcome: 'ALREADY_PROCESSED',
+    });
+
+    expect((await orderRepository.findById(order.id))?.status).toBe('EXPIRED');
+    expect((await auctionRepository.findById(auction.id))?.status).toBe(
+      AuctionStatus.DEFAULTED,
+    );
+    expect(events.filter((event) => event.type === 'auction:defaulted')).toHaveLength(
+      1,
+    );
+  });
+
+  it('procesa webhooks duplicados concurrentes con una respuesta idempotente', async () => {
+    const { auction, order } = closedAuction('concurrent-webhook', 'PENDING');
+    await auctionRepository.save(auction);
+    await orderRepository.save(order);
+    const events: RealtimeEvent[] = [];
+    const processor = new ProcessPaymentNotification(
+      { verify: () => Promise.resolve({ verified: true, verificationData: 'test' }) },
+      orderRepository,
+      eventRepository,
+      {
+        publish: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+      },
+      persistenceTransaction,
+    );
+    const payload = {
+      id: id('concurrent-webhook-event'),
+      paymentOrderId: order.id,
+      result: 'APPROVED',
+      occurredAt: order.createdAt.toISOString(),
+    };
+
+    const responses = await Promise.all([
+      processor.execute({ payload, verificationCredential: 'valid' }),
+      processor.execute({ payload, verificationCredential: 'valid' }),
+    ]);
+
+    expect(responses[1]).toEqual(responses[0]);
+    expect((await orderRepository.findById(order.id))?.status).toBe('PAID');
+    expect(await eventRepository.findById(payload.id)).toBeDefined();
+    expect(events.filter((event) => event.type === 'payment:confirmed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('un webhook no verificado no modifica la orden ni registra evento', async () => {
+    const { auction, order } = closedAuction('invalid-webhook', 'PENDING');
+    await auctionRepository.save(auction);
+    await orderRepository.save(order);
+    const eventId = id('invalid-webhook-event');
+    const processor = new ProcessPaymentNotification(
+      { verify: () => Promise.resolve({ verified: false }) },
+      orderRepository,
+      eventRepository,
+      { publish: () => Promise.resolve() },
+      persistenceTransaction,
+    );
+
+    await expect(
+      processor.execute({
+        payload: {
+          id: eventId,
+          paymentOrderId: order.id,
+          result: 'APPROVED',
+          occurredAt: order.createdAt.toISOString(),
+        },
+      }),
+    ).rejects.toBeInstanceOf(UnverifiedPaymentNotificationError);
+
+    expect((await orderRepository.findById(order.id))?.status).toBe('PENDING');
+    expect(await eventRepository.findById(eventId)).toBeUndefined();
+  });
+
+  it('serializa confirmación y vencimiento sin estados contradictorios', async () => {
+    const { auction, order } = closedAuction('payment-race', 'PENDING');
+    await auctionRepository.save(auction);
+    await orderRepository.save(order);
+    const eventId = id('payment-race-event');
+    const notification = new ProcessPaymentNotification(
+      { verify: () => Promise.resolve({ verified: true, verificationData: 'test' }) },
+      orderRepository,
+      eventRepository,
+      { publish: () => Promise.resolve() },
+      persistenceTransaction,
+    );
+    const expiration = new ProcessPaymentOrderExpiration(
+      orderRepository,
+      auctionRepository,
+      { now: () => order.dueAt },
+      { publish: () => Promise.resolve() },
+      persistenceTransaction,
+    );
+
+    await Promise.allSettled([
+      notification.execute({
+        payload: {
+          id: eventId,
+          paymentOrderId: order.id,
+          result: 'APPROVED',
+          occurredAt: order.dueAt.toISOString(),
+        },
+      }),
+      expiration.execute(order.id),
+    ]);
+
+    const persistedOrder = await orderRepository.findById(order.id);
+    const persistedAuction = await auctionRepository.findById(auction.id);
+    const persistedEvent = await eventRepository.findById(eventId);
+    const coherentPaidState =
+      persistedOrder?.status === 'PAID' &&
+      persistedAuction?.status.equals(AuctionStatus.CLOSED) === true &&
+      persistedEvent !== undefined;
+    const coherentExpiredState =
+      persistedOrder?.status === 'EXPIRED' &&
+      persistedAuction?.status.equals(AuctionStatus.DEFAULTED) === true &&
+      persistedEvent === undefined;
+
+    expect(coherentPaidState || coherentExpiredState).toBe(true);
   });
 
   it('guarda y restaura la subasta, sus pujas, rechazos, cierre y ganador', async () => {
@@ -314,6 +582,54 @@ describe('persistencia real en SQL Server', () => {
     ).rejects.toBeDefined();
   });
 
+  it('serializa pujas simultáneas sin perder la actualización rechazada', async () => {
+    const auction = openAuction('concurrent-bids');
+    await auctionRepository.save(auction);
+    const synchronizedRepository = new SynchronizedReadAuctionRepository(
+      auctionRepository,
+    );
+    const publishedEvents: RealtimeEvent[] = [];
+    const publisher: RealtimeEventPublisher = {
+      publish: (event) => {
+        publishedEvents.push(event);
+        return Promise.resolve();
+      },
+    };
+    const placeBid = new PlaceBid(
+      synchronizedRepository,
+      { now: () => new Date(BASE_DATE.getTime() + 60_000) },
+      publisher,
+    );
+
+    const results = await Promise.allSettled([
+      placeBid.execute({
+        id: id('concurrent-bid1'),
+        auctionId: auction.id,
+        bidderId: BIDDER_ONE_ID,
+        amount: 100_000,
+      }),
+      placeBid.execute({
+        id: id('concurrent-bid2'),
+        auctionId: auction.id,
+        bidderId: BIDDER_TWO_ID,
+        amount: 100_000,
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(
+      1,
+    );
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({ reason: expect.any(BidRejectedError) });
+
+    const restored = await auctionRepository.findById(auction.id);
+    expect(restored?.acceptedBids).toHaveLength(1);
+    expect(restored?.rejectedBidAttempts).toHaveLength(1);
+    expect(
+      publishedEvents.filter((event) => event.type === 'auction:bid-accepted'),
+    ).toHaveLength(1);
+  });
+
   it('revierte todas las tablas del agregado cuando una inserción interna falla', async () => {
     const { auction: original, order } = closedAuction('rollback', 'PENDING');
     await auctionRepository.save(original);
@@ -361,6 +677,36 @@ describe('persistencia real en SQL Server', () => {
     expect(restored?.closure?.winningBid?.id).toBe(id('rollback-bid2'));
   });
 });
+
+class SynchronizedReadAuctionRepository implements AuctionRepository {
+  private readCount = 0;
+  private releaseReads!: () => void;
+  private readonly bothReadsCompleted = new Promise<void>((resolve) => {
+    this.releaseReads = resolve;
+  });
+
+  constructor(private readonly delegate: AuctionRepository) {}
+
+  async findById(id: string): Promise<Auction | undefined> {
+    const auction = await this.delegate.findById(id);
+    this.readCount += 1;
+    if (this.readCount === 2) {
+      this.releaseReads();
+    }
+    if (this.readCount <= 2) {
+      await this.bothReadsCompleted;
+    }
+    return auction;
+  }
+
+  findPage(query: AuctionPageQuery): Promise<AuctionPage> {
+    return this.delegate.findPage(query);
+  }
+
+  save(auction: Auction): Promise<void> {
+    return this.delegate.save(auction);
+  }
+}
 
 function integrationEnvironment(
   environment: NodeJS.ProcessEnv,
@@ -500,6 +846,39 @@ function openAuction(suffix: string): Auction {
     acceptedBids: [],
     rejectedBidAttempts: [],
   });
+}
+
+function openAuctionWithBid(suffix: string): Auction {
+  const auction = openAuction(suffix);
+  return Auction.restore({
+    id: auction.id,
+    sellerId: auction.sellerId,
+    article: auction.article,
+    category: auction.category,
+    basePrice: auction.basePrice,
+    minimumIncrement: auction.minimumIncrement,
+    publishedAt: auction.publishedAt,
+    closesAt: auction.closesAt,
+    status: AuctionStatus.OPEN,
+    acceptedBids: [
+      new Bid(
+        id(`${suffix}-bid`),
+        auction.id,
+        BIDDER_ONE_ID,
+        new Money(100_000),
+        new Date(BASE_DATE.getTime() + 60_000),
+        1,
+      ),
+    ],
+    rejectedBidAttempts: [],
+  });
+}
+
+async function deletePaymentOrder(paymentOrderId: string): Promise<void> {
+  await database.query(
+    'DELETE FROM dbo.payment_orders WHERE id = @id;',
+    [{ name: 'id', type: mssql.NVarChar(100), value: paymentOrderId }],
+  );
 }
 
 function listedAuction(

@@ -39,6 +39,7 @@ BEGIN
     published_at DATETIME2(3) NOT NULL,
     closes_at DATETIME2(3) NOT NULL,
     status NVARCHAR(20) NOT NULL,
+    version BIGINT NOT NULL CONSTRAINT DF_auctions_version DEFAULT 0,
     CONSTRAINT PK_auctions PRIMARY KEY (id),
     CONSTRAINT FK_auctions_seller FOREIGN KEY (seller_id) REFERENCES dbo.users(id),
     CONSTRAINT CK_auctions_conservation_state CHECK (
@@ -55,6 +56,15 @@ BEGIN
     ),
     CONSTRAINT CK_auctions_dates CHECK (closes_at > published_at)
   );
+END;
+GO
+
+-- Control optimista para impedir actualizaciones perdidas entre pujas concurrentes.
+IF COL_LENGTH(N'dbo.auctions', N'version') IS NULL
+BEGIN
+  ALTER TABLE dbo.auctions
+    ADD version BIGINT NOT NULL
+      CONSTRAINT DF_auctions_version DEFAULT 0;
 END;
 GO
 

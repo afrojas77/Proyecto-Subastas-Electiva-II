@@ -42,4 +42,4 @@ socket.on('auction:result', (event) => console.log(event));
 
 La sala pública no exige ser participante de la subasta, según el alcance académico actual. Los mensajes contienen identificadores operativos, importes, estados y fechas, pero no correos, contraseñas, contactos ni datos de verificación de pagos.
 
-Socket.IO confirma que la emisión fue entregada al servidor, no a todos los clientes. Sin persistencia transaccional, outbox ni reintentos, no existe garantía de entrega exactamente una vez y un fallo posterior a guardar puede causar pérdida o duplicación observable del evento.
+Socket.IO confirma que la emisión fue entregada al servidor, no a todos los clientes. Aunque las escrituras críticas de SQL Server son transaccionales y la emisión ocurre después del commit, sin outbox ni reintentos no existe garantía de entrega exactamente una vez; una caída entre commit y emisión puede perder la notificación.

@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 
 import { AuthenticationRequiredError } from '../../../application/errors/authentication-required.error';
 import { AuthorizationError } from '../../../application/errors/authorization.error';
+import { ConcurrentAuctionUpdateError } from '../../../application/errors/concurrent-auction-update.error';
 import { DuplicateEmailError } from '../../../application/errors/duplicate-email.error';
 import { InvalidCredentialsError } from '../../../application/errors/invalid-credentials.error';
 import { InvalidPasswordError } from '../../../application/errors/invalid-password.error';
@@ -41,6 +42,10 @@ export function createErrorMiddleware(logger: ConsoleLogger) {
     }
     if (error instanceof DuplicateEmailError) {
       sendError(response, 409, 'DUPLICATE_EMAIL', error.message);
+      return;
+    }
+    if (error instanceof ConcurrentAuctionUpdateError) {
+      sendError(response, 409, error.code, error.message);
       return;
     }
     if (error instanceof AuthorizationError) {

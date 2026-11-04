@@ -1,4 +1,5 @@
 import { BidRejectedError } from '../../domain/errors/bid-rejected.error';
+import { ConcurrentAuctionUpdateError } from '../errors/concurrent-auction-update.error';
 import type { AuctionRepository } from '../../domain/ports/auction.repository';
 import type { Clock } from '../../domain/ports/clock';
 import { Money } from '../../domain/value-objects/money';
@@ -15,6 +16,7 @@ export interface PlaceBidCommand {
 }
 
 export class PlaceBid {
+  private static readonly MAX_CONCURRENT_UPDATE_ATTEMPTS = 3;
   private readonly getAuction: GetAuction;
 
   constructor(
@@ -27,6 +29,26 @@ export class PlaceBid {
   }
 
   async execute(command: PlaceBidCommand): Promise<Bid> {
+    for (
+      let attempt = 1;
+      attempt <= PlaceBid.MAX_CONCURRENT_UPDATE_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        return await this.executeAttempt(command);
+      } catch (error: unknown) {
+        const canRetry =
+          error instanceof ConcurrentAuctionUpdateError &&
+          attempt < PlaceBid.MAX_CONCURRENT_UPDATE_ATTEMPTS;
+        if (!canRetry) {
+          throw error;
+        }
+      }
+    }
+    throw new ConcurrentAuctionUpdateError(command.auctionId);
+  }
+
+  private async executeAttempt(command: PlaceBidCommand): Promise<Bid> {
     const auction = await this.getAuction.execute(command.auctionId);
     const previousLeadingBid = auction.acceptedBids.at(-1);
 

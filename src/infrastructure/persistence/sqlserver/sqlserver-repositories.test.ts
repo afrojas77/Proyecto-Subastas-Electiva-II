@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { ConcurrentAuctionUpdateError } from '../../../application/errors/concurrent-auction-update.error';
+import type { Auction } from '../../../domain/entities/auction';
 import { PaymentOrder } from '../../../domain/entities/payment-order';
 import { User } from '../../../domain/entities/user';
 import type { ProcessedPaymentEvent } from '../../../domain/ports/payment-event.repository';
@@ -167,6 +169,7 @@ describe('repositorios SQL Server', () => {
       published_at: new Date('2026-01-01T12:00:00.000Z'),
       closes_at: CREATED_AT,
       status: 'OPEN',
+      version: 0,
       closure_id: null,
       winning_bid_id: null,
     };
@@ -198,6 +201,7 @@ describe('repositorios SQL Server', () => {
       published_at: new Date('2026-01-01T12:00:00.000Z'),
       closes_at: CREATED_AT,
       status: 'OPEN',
+      version: 0,
       closure_id: null,
       winning_bid_id: null,
     };
@@ -236,18 +240,38 @@ describe('repositorios SQL Server', () => {
       Awaited<ReturnType<SqlAuctionRepository['findById']>>
     >;
     database.transactionCount = 0;
+    database.enqueue([{ version: 1 }]);
 
     await repository.save(auction);
 
     expect(database.transactionCount).toBe(1);
-    expect(database.calls.some((call) => call.statement.includes('MERGE dbo.auctions'))).toBe(
-      true,
-    );
+    expect(
+      database.calls.some((call) =>
+        call.statement.includes('WHERE id = @id AND version = @expectedVersion'),
+      ),
+    ).toBe(true);
     expect(
       database.calls.some((call) =>
         call.statement.includes('DELETE FROM dbo.accepted_bids'),
       ),
     ).toBe(true);
+  });
+
+  it('rechaza una escritura cuando cambió la versión leída del agregado', async () => {
+    const database = new FakeSqlDatabase();
+    const repository = new SqlAuctionRepository(database);
+    const auction = (await createOpenAuction(database, repository)) as Auction;
+    database.enqueue([]);
+
+    await expect(repository.save(auction)).rejects.toBeInstanceOf(
+      ConcurrentAuctionUpdateError,
+    );
+
+    expect(
+      database.calls.some((call) =>
+        call.statement.includes('DELETE FROM dbo.accepted_bids'),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -268,6 +292,7 @@ async function createOpenAuction(
       published_at: new Date('2026-01-01T12:00:00.000Z'),
       closes_at: CREATED_AT,
       status: 'OPEN',
+      version: 0,
       closure_id: null,
       winning_bid_id: null,
     },

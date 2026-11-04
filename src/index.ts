@@ -32,6 +32,7 @@ async function bootstrap(): Promise<void> {
     passwordHasher: new BcryptPasswordHasher(),
     paymentEventRepository: persistence.paymentEventRepository,
     paymentOrderRepository: persistence.paymentOrderRepository,
+    persistenceTransaction: persistence.persistenceTransaction,
     userRepository: persistence.userRepository,
   });
   httpServer.on('request', app);

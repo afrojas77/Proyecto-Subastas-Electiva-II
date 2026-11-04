@@ -2,6 +2,7 @@ import type { AuctionRepository } from '../../domain/ports/auction.repository';
 import type { PaymentEventRepository } from '../../domain/ports/payment-event.repository';
 import type { PaymentOrderRepository } from '../../domain/ports/payment-order.repository';
 import type { UserRepository } from '../../domain/ports/user.repository';
+import type { PersistenceTransaction } from '../../application/ports/persistence-transaction';
 import { InMemoryAuctionRepository } from './memory/in-memory-auction.repository';
 import { InMemoryPaymentEventRepository } from './memory/in-memory-payment-event.repository';
 import { InMemoryPaymentOrderRepository } from './memory/in-memory-payment-order.repository';
@@ -10,6 +11,7 @@ import { loadSqlServerConfig } from './sqlserver/sqlserver-config';
 import { SqlAuctionRepository } from './sqlserver/sql-auction.repository';
 import { SqlPaymentEventRepository } from './sqlserver/sql-payment-event.repository';
 import { SqlPaymentOrderRepository } from './sqlserver/sql-payment-order.repository';
+import { SqlPersistenceTransaction } from './sqlserver/sql-persistence-transaction';
 import { SqlUserRepository } from './sqlserver/sql-user.repository';
 import { SqlServerDatabase } from './sqlserver/sqlserver-database';
 
@@ -17,6 +19,7 @@ export interface PersistenceAdapters {
   auctionRepository: AuctionRepository;
   paymentEventRepository: PaymentEventRepository;
   paymentOrderRepository: PaymentOrderRepository;
+  persistenceTransaction?: PersistenceTransaction;
   userRepository: UserRepository;
   close(): Promise<void>;
 }
@@ -41,6 +44,7 @@ export async function createPersistenceAdapters(
     auctionRepository: new SqlAuctionRepository(database),
     paymentEventRepository: new SqlPaymentEventRepository(database),
     paymentOrderRepository: new SqlPaymentOrderRepository(database),
+    persistenceTransaction: new SqlPersistenceTransaction(database),
     userRepository: new SqlUserRepository(database),
     close: () => database.close(),
   };

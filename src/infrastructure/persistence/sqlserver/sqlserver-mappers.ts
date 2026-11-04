@@ -60,6 +60,7 @@ export interface AuctionRow {
   published_at: Date;
   closes_at: Date;
   status: string;
+  version: SqlBigInt;
   closure_id: string | null;
   winning_bid_id: string | null;
 }

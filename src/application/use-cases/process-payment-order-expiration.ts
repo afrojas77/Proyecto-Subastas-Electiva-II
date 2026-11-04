@@ -6,6 +6,7 @@ import type { Clock } from '../../domain/ports/clock';
 import type { PaymentOrderRepository } from '../../domain/ports/payment-order.repository';
 import { AuctionStatus } from '../../domain/value-objects/auction-status';
 import { ResourceNotFoundError } from '../errors/resource-not-found.error';
+import type { PersistenceTransaction } from '../ports/persistence-transaction';
 import type { RealtimeEventPublisher } from '../ports/realtime-event-publisher';
 
 export type ProcessPaymentOrderExpirationResult =
@@ -36,19 +37,76 @@ export type ProcessPaymentOrderExpirationResult =
       auctionStatus: 'DEFAULTED';
     };
 
+type ExpirationProcessingResult =
+  | (Extract<
+      ProcessPaymentOrderExpirationResult,
+      { outcome: 'PROCESSED' }
+    > & { dueAt: string })
+  | Exclude<
+      ProcessPaymentOrderExpirationResult,
+      { outcome: 'PROCESSED' }
+    >;
+
 export class ProcessPaymentOrderExpiration {
   constructor(
     private readonly paymentOrderRepository: PaymentOrderRepository,
     private readonly auctionRepository: AuctionRepository,
     private readonly clock: Clock,
     private readonly realtimeEventPublisher: RealtimeEventPublisher,
+    private readonly persistenceTransaction?: PersistenceTransaction,
   ) {}
 
   async execute(
     paymentOrderId: string,
   ): Promise<ProcessPaymentOrderExpirationResult> {
+    const process = (
+      paymentOrderRepository: PaymentOrderRepository,
+      auctionRepository: AuctionRepository,
+    ) =>
+      this.processExpiration(
+        paymentOrderId,
+        paymentOrderRepository,
+        auctionRepository,
+      );
+    const result = this.persistenceTransaction
+      ? await this.persistenceTransaction.execute(
+          [`payment-order:${paymentOrderId}`],
+          (repositories) =>
+            process(
+              repositories.paymentOrderRepository,
+              repositories.auctionRepository,
+            ),
+        )
+      : await process(this.paymentOrderRepository, this.auctionRepository);
+    if (result.outcome === 'PROCESSED') {
+      await this.realtimeEventPublisher.publish({
+        type: 'auction:defaulted',
+        auctionId: result.auctionId,
+        paymentOrderId: result.paymentOrderId,
+        dueAt: result.dueAt,
+        orderStatus: 'EXPIRED',
+        auctionStatus: 'DEFAULTED',
+      });
+    }
+    if (result.outcome === 'PROCESSED') {
+      return {
+        outcome: result.outcome,
+        paymentOrderId: result.paymentOrderId,
+        auctionId: result.auctionId,
+        orderStatus: result.orderStatus,
+        auctionStatus: result.auctionStatus,
+      };
+    }
+    return result;
+  }
+
+  private async processExpiration(
+    paymentOrderId: string,
+    paymentOrderRepository: PaymentOrderRepository,
+    auctionRepository: AuctionRepository,
+  ): Promise<ExpirationProcessingResult> {
     const paymentOrder =
-      await this.paymentOrderRepository.findById(paymentOrderId);
+      await paymentOrderRepository.findById(paymentOrderId);
     if (!paymentOrder) {
       throw new ResourceNotFoundError('Orden de pago', paymentOrderId);
     }
@@ -58,7 +116,10 @@ export class ProcessPaymentOrderExpiration {
     }
 
     if (paymentOrder.status === 'EXPIRED') {
-      const auction = await this.findAuction(paymentOrder.auctionId);
+      const auction = await this.findAuction(
+        paymentOrder.auctionId,
+        auctionRepository,
+      );
       this.assertAlreadyProcessed(paymentOrder, auction);
       return {
         outcome: 'ALREADY_PROCESSED',
@@ -79,20 +140,15 @@ export class ProcessPaymentOrderExpiration {
       };
     }
 
-    const auction = await this.findAuction(paymentOrder.auctionId);
+    const auction = await this.findAuction(
+      paymentOrder.auctionId,
+      auctionRepository,
+    );
     paymentOrder.expire(evaluatedAt);
     auction.markAsDefaulted(paymentOrder);
 
-    await this.paymentOrderRepository.save(paymentOrder);
-    await this.auctionRepository.save(auction);
-    await this.realtimeEventPublisher.publish({
-      type: 'auction:defaulted',
-      auctionId: auction.id,
-      paymentOrderId: paymentOrder.id,
-      dueAt: paymentOrder.dueAt.toISOString(),
-      orderStatus: 'EXPIRED',
-      auctionStatus: 'DEFAULTED',
-    });
+    await paymentOrderRepository.save(paymentOrder);
+    await auctionRepository.save(auction);
 
     return {
       outcome: 'PROCESSED',
@@ -100,11 +156,15 @@ export class ProcessPaymentOrderExpiration {
       auctionId: paymentOrder.auctionId,
       orderStatus: 'EXPIRED',
       auctionStatus: 'DEFAULTED',
+      dueAt: paymentOrder.dueAt.toISOString(),
     };
   }
 
-  private async findAuction(auctionId: string): Promise<Auction> {
-    const auction = await this.auctionRepository.findById(auctionId);
+  private async findAuction(
+    auctionId: string,
+    auctionRepository: AuctionRepository,
+  ): Promise<Auction> {
+    const auction = await auctionRepository.findById(auctionId);
     if (!auction) {
       throw new ResourceNotFoundError('Subasta', auctionId);
     }
@@ -135,7 +195,7 @@ export class ProcessPaymentOrderExpiration {
   private resultForTerminalOrder(
     outcome: 'PAID',
     paymentOrder: PaymentOrder,
-  ): ProcessPaymentOrderExpirationResult {
+  ): Extract<ProcessPaymentOrderExpirationResult, { outcome: 'PAID' }> {
     return {
       outcome,
       paymentOrderId: paymentOrder.id,
