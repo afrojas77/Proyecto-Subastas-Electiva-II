@@ -15,6 +15,8 @@ export interface AuctionPage {
 
 export interface AuctionRepository {
   findById(id: string): Promise<Auction | undefined>;
+  findBySellerId(sellerId: string): Promise<readonly Auction[]>;
+  findByBidderId(bidderId: string): Promise<readonly Auction[]>;
   findPage(query: AuctionPageQuery): Promise<AuctionPage>;
   save(auction: Auction): Promise<void>;
 }

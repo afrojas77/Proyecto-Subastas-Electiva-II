@@ -21,7 +21,7 @@ export class SqlUserRepository implements UserRepository {
 
   async findById(id: string): Promise<User | undefined> {
     const result = await this.database.query<UserRow>(
-      `SELECT id, email, password_hash
+      `SELECT id, name, email, password_hash
        FROM dbo.users
        WHERE id = @id;`,
       [{ name: 'id', type: mssql.NVarChar(100), value: id }],
@@ -32,7 +32,7 @@ export class SqlUserRepository implements UserRepository {
 
   async findByEmail(email: Email): Promise<User | undefined> {
     const result = await this.database.query<UserRow>(
-      `SELECT id, email, password_hash
+      `SELECT id, name, email, password_hash
        FROM dbo.users
        WHERE email = @email;`,
       [{ name: 'email', type: mssql.NVarChar(320), value: email.value }],
@@ -44,15 +44,24 @@ export class SqlUserRepository implements UserRepository {
   async save(user: User): Promise<void> {
     await this.database.query(
       `MERGE dbo.users AS target
-       USING (SELECT @id AS id, @email AS email, @passwordHash AS password_hash) AS source
+       USING (
+         SELECT @id AS id, @name AS name, @email AS email,
+                @passwordHash AS password_hash
+       ) AS source
        ON target.id = source.id
        WHEN MATCHED THEN UPDATE SET
+         name = COALESCE(source.name, target.name),
          email = source.email,
          password_hash = COALESCE(source.password_hash, target.password_hash)
-       WHEN NOT MATCHED THEN INSERT (id, email, password_hash)
-         VALUES (source.id, source.email, source.password_hash);`,
+       WHEN NOT MATCHED THEN INSERT (id, name, email, password_hash)
+         VALUES (source.id, source.name, source.email, source.password_hash);`,
       [
         { name: 'id', type: mssql.NVarChar(100), value: user.id },
+        {
+          name: 'name',
+          type: mssql.NVarChar(200),
+          value: user.name ?? null,
+        },
         {
           name: 'email',
           type: mssql.NVarChar(320),

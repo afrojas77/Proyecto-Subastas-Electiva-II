@@ -11,6 +11,7 @@ import { UnverifiedPaymentNotificationError } from '../errors/unverified-payment
 import type { PaymentNotificationVerifier } from '../ports/payment-notification-verifier';
 import type { PersistenceTransaction } from '../ports/persistence-transaction';
 import type { RealtimeEventPublisher } from '../ports/realtime-event-publisher';
+import type { ProcessPaymentOrderExpiration } from './process-payment-order-expiration';
 
 export interface ProcessPaymentNotificationCommand {
   payload: unknown;
@@ -37,6 +38,7 @@ export class ProcessPaymentNotification {
     private readonly paymentEventRepository: PaymentEventRepository,
     private readonly realtimeEventPublisher: RealtimeEventPublisher,
     private readonly persistenceTransaction?: PersistenceTransaction,
+    private readonly processPaymentOrderExpiration?: ProcessPaymentOrderExpiration,
   ) {}
 
   async execute(
@@ -51,6 +53,7 @@ export class ProcessPaymentNotification {
     }
 
     const data = parseNotification(command.payload);
+    await this.processPaymentOrderExpiration?.execute(data.paymentOrderId);
     const contentKey = createContentKey(data);
     const process = (
       paymentOrderRepository: PaymentOrderRepository,
@@ -72,10 +75,7 @@ export class ProcessPaymentNotification {
               repositories.paymentEventRepository,
             ),
         )
-      : await process(
-          this.paymentOrderRepository,
-          this.paymentEventRepository,
-        );
+      : await process(this.paymentOrderRepository, this.paymentEventRepository);
     if (processing.confirmedEvent && processing.auctionId) {
       await this.realtimeEventPublisher.publish({
         type: 'payment:confirmed',

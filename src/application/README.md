@@ -2,13 +2,13 @@
 
 Los casos de uso coordinan el dominio mediante sus puertos, sin conocer Express ni los adaptadores concretos. Esta capa publica, consulta, lista, cancela y cierra subastas; también registra pujas y persiste el agregado tras una puja rechazada para conservar su auditoría.
 
-`RegisterUser` normaliza y valida el correo, aplica la política mínima de contraseña, verifica duplicados y delega el hash en `PasswordHasher`. `LoginUser` usa un mensaje genérico tanto para correo inexistente como para contraseña incorrecta y delega la emisión en `AccessTokenService`. `GetAuthenticatedProfile` recibe la identidad ya validada por el adaptador HTTP. Ninguno de estos casos de uso conoce bcrypt, JWT, Express o SQL Server, y sus DTO nunca contienen el hash.
+`RegisterUser` exige el nombre, normaliza y valida el correo, aplica la política mínima de contraseña, verifica duplicados y delega el hash en `PasswordHasher`. `LoginUser` usa un mensaje genérico tanto para correo inexistente como para contraseña incorrecta y delega la emisión en `AccessTokenService`. `GetAuthenticatedProfile` recibe la identidad ya validada por el adaptador HTTP y consulta, mediante `AuctionRepository`, las subastas publicadas y aquellas con pujas aceptadas del usuario. Ninguno de estos casos de uso conoce bcrypt, JWT, Express o SQL Server, y sus DTO nunca contienen el hash.
 
 Los adaptadores HTTP obtienen vendedor y postor desde el token validado y los entregan a `PublishAuction` y `PlaceBid`; los cuerpos HTTP no controlan esas identidades. `CancelAuction` recibe el solicitante como parte de su comando y comprueba en Application que coincida con el vendedor antes de invocar las reglas de cancelación del agregado. El historial requiere autenticación en el adaptador HTTP y mantiene su DTO sin correos, hashes o datos de contacto.
 
 `PlaceBid` publica eventos únicamente después de guardar el agregado. Si el adaptador SQL informa que otra solicitud cambió la misma subasta, el caso de uso vuelve a cargarla y reevalúa la oferta hasta tres veces. Así no anuncia una puja cuya escritura perdió el control de versión; esta coordinación sigue dependiendo sólo del puerto de repositorio y no introduce SQL Server en Application.
 
-`ListAuctions` normaliza los filtros opcionales de categoría y estado, valida `page` y `limit` (máximo 100) y delega al puerto la consulta paginada y su conteo. `GetPaymentOrder` localiza la orden y autoriza que sólo su ganador/deudor pueda consultarla; el adaptador HTTP obtiene esa identidad del JWT y el presentador no expone `debtorId` ni datos de usuario.
+`ListAuctions` normaliza los filtros opcionales de categoría y estado, valida `page` y `limit` (máximo 100) y delega al puerto la consulta paginada y su conteo. El detalle autenticado devuelve la oferta vigente y el historial permitido por RN-23. `GetPaymentOrder` localiza la orden, autoriza que sólo su ganador/deudor pueda consultarla y ejecuta la evaluación perezosa de RN-20 antes de devolver su estado actual; el presentador no expone `debtorId` ni datos de usuario.
 
 ## Cierre perezoso
 
@@ -24,7 +24,7 @@ La implementación en memoria no ofrece exclusión mutua ni rollback. Con SQL Se
 
 `ProcessPaymentOrderExpiration` procesa por ID una orden pendiente usando el `Clock` inyectado. Si alcanzó `dueAt`, ejecuta `PaymentOrder.expire()`, localiza la subasta mediante `auctionId`, ejecuta `Auction.markAsDefaulted()` y guarda ambos agregados. Devuelve resultados explícitos para una ejecución nueva, una orden aún no vencida, una orden pagada o una pareja orden/subasta ya procesada. Una notificación `REJECTED` no simula vencimiento.
 
-El caso de uso no está expuesto por HTTP ni se ejecuta en segundo plano. Para automatizar RN-20 hará falta un coordinador programado y un puerto de consulta capaz de descubrir órdenes `PENDING` con `dueAt` menor o igual al instante de evaluación; el contrato actual sólo permite buscar una orden conocida por ID.
+RN-20 sigue la misma estrategia perezosa aceptada para el cierre de subastas: `GetPaymentOrder` lo evalúa al consultar la orden y `ProcessPaymentNotification` lo evalúa después de verificar el origen y antes de aplicar el evento. Esto evita un scheduler, no añade un endpoint privilegiado y garantiza que una confirmación recibida cuando la orden ya venció no pueda convertirla en `PAID`. Una orden que nunca se consulta ni recibe notificaciones se materializa como vencida en la siguiente interacción; no existe procesamiento en segundo plano.
 
 Los repositorios en memoria no ofrecen transacciones ni rollback y conservan referencias mutables. En SQL Server, `ProcessPaymentOrderExpiration` ejecuta la carga, las dos transiciones y ambos guardados bajo una misma transacción bloqueada por orden; un reintento observa el par `EXPIRED`/`DEFAULTED` ya confirmado y no vuelve a publicar el evento.
 

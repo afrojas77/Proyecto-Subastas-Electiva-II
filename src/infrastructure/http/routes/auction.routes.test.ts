@@ -137,16 +137,24 @@ describe('rutas HTTP de subastas', () => {
       .post('/api/auctions')
       .set('Authorization', authorizationFor('seller-1'))
       .send(auctionPayload());
-    const found = await api.get('/api/auctions/auction-1');
+    const found = await api
+      .get('/api/auctions/auction-1')
+      .set('Authorization', authorizationFor('registered-viewer'));
 
     const createdBody = responseBody<{ id: string; sellerId: string }>(created);
-    const foundBody = responseBody<{ status: string }>(found);
+    const foundBody = responseBody<{
+      status: string;
+      highestBid: unknown;
+      bids: unknown[];
+    }>(found);
 
     expect(created.status).toBe(201);
     expect(createdBody.id).toBe('auction-1');
     expect(createdBody.sellerId).toBe('seller-1');
     expect(found.status).toBe(200);
     expect(foundBody.status).toBe('OPEN');
+    expect(foundBody.highestBid).toBeNull();
+    expect(foundBody.bids).toEqual([]);
   });
 
   it('registra una puja y expone un historial sin información de contacto', async () => {
@@ -163,6 +171,9 @@ describe('rutas HTTP de subastas', () => {
     const history = await api
       .get('/api/auctions/auction-1/bids')
       .set('Authorization', authorizationFor('registered-viewer'));
+    const detail = await api
+      .get('/api/auctions/auction-1')
+      .set('Authorization', authorizationFor('registered-viewer'));
 
     const historyBody = responseBody<{
       bids: Array<{ bidderId: string; amount: number; email?: string }>;
@@ -174,6 +185,14 @@ describe('rutas HTTP de subastas', () => {
       expect.objectContaining({ bidderId: 'bidder-1', amount: 100_000 }),
     ]);
     expect(historyBody.bids[0]).not.toHaveProperty('email');
+    expect(
+      responseBody<{ highestBid: { id: string }; bids: unknown[] }>(detail),
+    ).toEqual(
+      expect.objectContaining({
+        highestBid: expect.objectContaining({ id: 'bid-1' }),
+        bids: [expect.objectContaining({ id: 'bid-1' })],
+      }),
+    );
   });
 
   it('responde 400 y conserva el rechazo de una puja inválida', async () => {
@@ -195,9 +214,11 @@ describe('rutas HTTP de subastas', () => {
   });
 
   it('responde 404 cuando la subasta no existe', async () => {
-    const { api } = setupApi();
+    const { api, authorizationFor } = setupApi();
 
-    const response = await api.get('/api/auctions/missing');
+    const response = await api
+      .get('/api/auctions/missing')
+      .set('Authorization', authorizationFor('registered-viewer'));
 
     const body = responseBody<{ error: { code: string } }>(response);
 
@@ -283,10 +304,14 @@ describe('rutas HTTP de subastas', () => {
       .send({ id: 'bid-1', amount: 100_000 });
     clock.set(new Date(PUBLISHED_AT.getTime() + 60 * 60 * 1000));
 
-    const response = await api.get('/api/auctions/auction-1');
+    const response = await api
+      .get('/api/auctions/auction-1')
+      .set('Authorization', authorizationFor('registered-viewer'));
 
     expect(response.status).toBe(200);
-    expect(responseBody<{ status: string; winnerId: string }>(response)).toEqual(
+    expect(
+      responseBody<{ status: string; winnerId: string }>(response),
+    ).toEqual(
       expect.objectContaining({ status: 'CLOSED', winnerId: 'bidder-1' }),
     );
   });
@@ -303,7 +328,9 @@ describe('rutas HTTP de subastas', () => {
       .post('/api/auctions/auction-1/bids')
       .set('Authorization', authorizationFor('bidder-1'))
       .send({ id: 'late-bid', amount: 100_000 });
-    const auction = await api.get('/api/auctions/auction-1');
+    const auction = await api
+      .get('/api/auctions/auction-1')
+      .set('Authorization', authorizationFor('registered-viewer'));
 
     expect(bid.status).toBe(400);
     expect(responseBody<{ error: { code: string } }>(bid).error.code).toBe(
@@ -312,19 +339,24 @@ describe('rutas HTTP de subastas', () => {
     expect(responseBody<{ status: string }>(auction).status).toBe('DESERTED');
   });
 
-  it('rechaza sin token publicación, puja, cancelación e historial', async () => {
+  it('rechaza sin token publicación, detalle, puja, cancelación e historial', async () => {
     const { api } = setupApi();
 
     const publish = await api.post('/api/auctions').send(auctionPayload());
+    const detail = await api.get('/api/auctions/auction-1');
     const bid = await api
       .post('/api/auctions/auction-1/bids')
       .send({ id: 'bid-1', amount: 100_000 });
     const cancel = await api.post('/api/auctions/auction-1/cancel');
     const history = await api.get('/api/auctions/auction-1/bids');
 
-    expect([publish.status, bid.status, cancel.status, history.status]).toEqual([
-      401, 401, 401, 401,
-    ]);
+    expect([
+      publish.status,
+      detail.status,
+      bid.status,
+      cancel.status,
+      history.status,
+    ]).toEqual([401, 401, 401, 401, 401]);
   });
 
   it('rechaza sellerId y bidderId enviados por el cliente', async () => {

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import * as mssql from 'mssql';
 
 import { LoginUser } from '../../../application/use-cases/login-user';
+import { GetAuthenticatedProfile } from '../../../application/use-cases/get-authenticated-profile';
 import { GetAuction } from '../../../application/use-cases/get-auction';
 import { GetPaymentOrder } from '../../../application/use-cases/get-payment-order';
 import { ProcessAuctionClosure } from '../../../application/use-cases/process-auction-closure';
@@ -31,6 +32,7 @@ import {
 } from '../../../domain/entities/rejected-bid-attempt';
 import { User } from '../../../domain/entities/user';
 import { BidRejectedError } from '../../../domain/errors/bid-rejected.error';
+import { InvalidPaymentOrderStateError } from '../../../domain/errors/invalid-payment-order-state.error';
 import type {
   AuctionPage,
   AuctionPageQuery,
@@ -102,12 +104,14 @@ describe('persistencia real en SQL Server', () => {
       id('user'),
       new Email(`${RUN_PREFIX}.USER@EXAMPLE.COM`),
       '$2b$10$integrationOnlyPasswordHashValue000000000000000000000',
+      'Usuario Integración',
     );
     await userRepository.save(user);
 
     const restored = await userRepository.findById(user.id);
 
     expect(restored?.id).toBe(user.id);
+    expect(restored?.name).toBe('Usuario Integración');
     expect(restored?.email.value).toBe(`${RUN_PREFIX}.user@example.com`);
     expect(restored?.passwordHash).toBe(user.passwordHash);
     expect((await userRepository.findByEmail(user.email))?.id).toBe(user.id);
@@ -120,6 +124,8 @@ describe('persistencia real en SQL Server', () => {
     const duplicate = new User(
       id('duplicate-user'),
       new Email(`${RUN_PREFIX}.user@example.com`),
+      undefined,
+      'Usuario Duplicado',
     );
     await expect(userRepository.save(duplicate)).rejects.toBeDefined();
     expect(await userRepository.findById(duplicate.id)).toBeUndefined();
@@ -139,6 +145,7 @@ describe('persistencia real en SQL Server', () => {
     const login = new LoginUser(userRepository, hasher, tokens);
 
     const profile = await register.execute({
+      name: 'Usuario Autenticado',
       email,
       password: 'integration-password',
     });
@@ -148,10 +155,33 @@ describe('persistencia real en SQL Server', () => {
     });
     const restored = await userRepository.findById(userId);
 
-    expect(profile).toEqual({ id: userId, email });
+    expect(profile).toEqual({
+      id: userId,
+      name: 'Usuario Autenticado',
+      email,
+    });
     expect(restored?.passwordHash).toBeDefined();
     expect(restored?.passwordHash).not.toBe('integration-password');
     expect(tokens.verify(authenticated.token)).toEqual({ userId });
+  });
+
+  it('consulta desde SQL las subastas publicadas y participadas del perfil', async () => {
+    const auction = openAuctionWithBid('profile-activity');
+    await auctionRepository.save(auction);
+    const profile = new GetAuthenticatedProfile(
+      userRepository,
+      auctionRepository,
+    );
+
+    const sellerProfile = await profile.execute(SELLER_ID);
+    const bidderProfile = await profile.execute(BIDDER_ONE_ID);
+
+    expect(sellerProfile.publishedAuctions.map(({ id }) => id)).toContain(
+      auction.id,
+    );
+    expect(bidderProfile.participatedAuctions.map(({ id }) => id)).toContain(
+      auction.id,
+    );
   });
 
   it('persiste un cierre perezoso una sola vez y restaura su orden', async () => {
@@ -203,9 +233,9 @@ describe('persistencia real en SQL Server', () => {
     expect(restored?.winnerId).toBe(BIDDER_ONE_ID);
     expect(restored?.closure?.paymentOrder?.id).toBe(order?.id);
     expect(order?.debtorId).toBe(BIDDER_ONE_ID);
-    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
-      1,
-    );
+    expect(
+      events.filter((event) => event.type === 'auction:closed'),
+    ).toHaveLength(1);
   });
 
   it('persiste como desierta una subasta sin pujas y no crea orden', async () => {
@@ -232,9 +262,9 @@ describe('persistencia real en SQL Server', () => {
     expect(
       await orderRepository.findById(`payment-${auction.id}`),
     ).toBeUndefined();
-    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
-      1,
-    );
+    expect(
+      events.filter((event) => event.type === 'auction:closed'),
+    ).toHaveLength(1);
   });
 
   it('revierte el cierre si falla la orden y permite reintentarlo', async () => {
@@ -274,9 +304,9 @@ describe('persistencia real en SQL Server', () => {
     expect((await auctionRepository.findById(auction.id))?.status).toBe(
       AuctionStatus.CLOSED,
     );
-    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
-      1,
-    );
+    expect(
+      events.filter((event) => event.type === 'auction:closed'),
+    ).toHaveLength(1);
   });
 
   it('serializa dos cierres y crea una sola orden y un solo evento', async () => {
@@ -305,10 +335,12 @@ describe('persistencia real en SQL Server', () => {
 
     expect(closures[0]?.paymentOrder?.id).toBe(`payment-${auction.id}`);
     expect(closures[1]?.paymentOrder?.id).toBe(`payment-${auction.id}`);
-    expect(await orderRepository.findById(`payment-${auction.id}`)).toBeDefined();
-    expect(events.filter((event) => event.type === 'auction:closed')).toHaveLength(
-      1,
-    );
+    expect(
+      await orderRepository.findById(`payment-${auction.id}`),
+    ).toBeDefined();
+    expect(
+      events.filter((event) => event.type === 'auction:closed'),
+    ).toHaveLength(1);
   });
 
   it('vence orden y subasta atómicamente y tolera el reintento', async () => {
@@ -329,11 +361,13 @@ describe('persistencia real en SQL Server', () => {
       persistenceTransaction,
     );
 
-    await expect(processor.execute(order.id)).resolves.toMatchObject({
-      outcome: 'PROCESSED',
-      orderStatus: 'EXPIRED',
-      auctionStatus: 'DEFAULTED',
-    });
+    const getPaymentOrder = new GetPaymentOrder(orderRepository, processor);
+    await expect(
+      getPaymentOrder.execute({
+        paymentOrderId: order.id,
+        requesterId: order.debtorId,
+      }),
+    ).resolves.toMatchObject({ status: 'EXPIRED' });
     await expect(processor.execute(order.id)).resolves.toMatchObject({
       outcome: 'ALREADY_PROCESSED',
     });
@@ -342,9 +376,9 @@ describe('persistencia real en SQL Server', () => {
     expect((await auctionRepository.findById(auction.id))?.status).toBe(
       AuctionStatus.DEFAULTED,
     );
-    expect(events.filter((event) => event.type === 'auction:defaulted')).toHaveLength(
-      1,
-    );
+    expect(
+      events.filter((event) => event.type === 'auction:defaulted'),
+    ).toHaveLength(1);
   });
 
   it('procesa webhooks duplicados concurrentes con una respuesta idempotente', async () => {
@@ -353,7 +387,10 @@ describe('persistencia real en SQL Server', () => {
     await orderRepository.save(order);
     const events: RealtimeEvent[] = [];
     const processor = new ProcessPaymentNotification(
-      { verify: () => Promise.resolve({ verified: true, verificationData: 'test' }) },
+      {
+        verify: () =>
+          Promise.resolve({ verified: true, verificationData: 'test' }),
+      },
       orderRepository,
       eventRepository,
       {
@@ -379,9 +416,9 @@ describe('persistencia real en SQL Server', () => {
     expect(responses[1]).toEqual(responses[0]);
     expect((await orderRepository.findById(order.id))?.status).toBe('PAID');
     expect(await eventRepository.findById(payload.id)).toBeDefined();
-    expect(events.filter((event) => event.type === 'payment:confirmed')).toHaveLength(
-      1,
-    );
+    expect(
+      events.filter((event) => event.type === 'payment:confirmed'),
+    ).toHaveLength(1);
   });
 
   it('un webhook no verificado no modifica la orden ni registra evento', async () => {
@@ -412,13 +449,58 @@ describe('persistencia real en SQL Server', () => {
     expect(await eventRepository.findById(eventId)).toBeUndefined();
   });
 
+  it('vence atómicamente antes de rechazar una confirmación tardía', async () => {
+    const { auction, order } = closedAuction('late-confirmation', 'PENDING');
+    await auctionRepository.save(auction);
+    await orderRepository.save(order);
+    const eventId = id('late-confirmation-event');
+    const expiration = new ProcessPaymentOrderExpiration(
+      orderRepository,
+      auctionRepository,
+      { now: () => order.dueAt },
+      { publish: () => Promise.resolve() },
+      persistenceTransaction,
+    );
+    const notification = new ProcessPaymentNotification(
+      {
+        verify: () =>
+          Promise.resolve({ verified: true, verificationData: 'test' }),
+      },
+      orderRepository,
+      eventRepository,
+      { publish: () => Promise.resolve() },
+      persistenceTransaction,
+      expiration,
+    );
+
+    await expect(
+      notification.execute({
+        payload: {
+          id: eventId,
+          paymentOrderId: order.id,
+          result: 'APPROVED',
+          occurredAt: order.dueAt.toISOString(),
+        },
+      }),
+    ).rejects.toBeInstanceOf(InvalidPaymentOrderStateError);
+
+    expect((await orderRepository.findById(order.id))?.status).toBe('EXPIRED');
+    expect((await auctionRepository.findById(auction.id))?.status).toBe(
+      AuctionStatus.DEFAULTED,
+    );
+    expect(await eventRepository.findById(eventId)).toBeUndefined();
+  });
+
   it('serializa confirmación y vencimiento sin estados contradictorios', async () => {
     const { auction, order } = closedAuction('payment-race', 'PENDING');
     await auctionRepository.save(auction);
     await orderRepository.save(order);
     const eventId = id('payment-race-event');
     const notification = new ProcessPaymentNotification(
-      { verify: () => Promise.resolve({ verified: true, verificationData: 'test' }) },
+      {
+        verify: () =>
+          Promise.resolve({ verified: true, verificationData: 'test' }),
+      },
       orderRepository,
       eventRepository,
       { publish: () => Promise.resolve() },
@@ -483,26 +565,26 @@ describe('persistencia real en SQL Server', () => {
 
   it('aplica filtros, paginación y conteo en el repositorio SQL', async () => {
     await auctionRepository.save(
-      listedAuction('list-1', 'Libros', AuctionStatus.OPEN, 1),
+      listedAuction('list-1', 'Paginacion', AuctionStatus.OPEN, 1),
     );
     await auctionRepository.save(
-      listedAuction('list-2', 'Libros', AuctionStatus.OPEN, 2),
+      listedAuction('list-2', 'Paginacion', AuctionStatus.OPEN, 2),
     );
     await auctionRepository.save(
-      listedAuction('list-3', 'Libros', AuctionStatus.CANCELLED, 3),
+      listedAuction('list-3', 'Paginacion', AuctionStatus.CANCELLED, 3),
     );
     await auctionRepository.save(
       listedAuction('list-4', 'Arte', AuctionStatus.OPEN, 4),
     );
 
     const first = await auctionRepository.findPage({
-      category: 'Libros',
+      category: 'Paginacion',
       status: 'OPEN',
       page: 1,
       limit: 1,
     });
     const second = await auctionRepository.findPage({
-      category: 'Libros',
+      category: 'Paginacion',
       status: 'OPEN',
       page: 2,
       limit: 1,
@@ -616,9 +698,9 @@ describe('persistencia real en SQL Server', () => {
       }),
     ]);
 
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(
-      1,
-    );
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
     const rejected = results.find((result) => result.status === 'rejected');
     expect(rejected).toMatchObject({ reason: expect.any(BidRejectedError) });
 
@@ -699,6 +781,14 @@ class SynchronizedReadAuctionRepository implements AuctionRepository {
     return auction;
   }
 
+  findBySellerId(sellerId: string): Promise<readonly Auction[]> {
+    return this.delegate.findBySellerId(sellerId);
+  }
+
+  findByBidderId(bidderId: string): Promise<readonly Auction[]> {
+    return this.delegate.findByBidderId(bidderId);
+  }
+
   findPage(query: AuctionPageQuery): Promise<AuctionPage> {
     return this.delegate.findPage(query);
   }
@@ -767,13 +857,28 @@ async function cleanupRunData(sqlDatabase: SqlServerDatabase): Promise<void> {
 
 async function seedRelationalUsers(): Promise<void> {
   await userRepository.save(
-    new User(SELLER_ID, new Email(`${RUN_PREFIX}.seller@example.com`)),
+    new User(
+      SELLER_ID,
+      new Email(`${RUN_PREFIX}.seller@example.com`),
+      undefined,
+      'Vendedor Integración',
+    ),
   );
   await userRepository.save(
-    new User(BIDDER_ONE_ID, new Email(`${RUN_PREFIX}.bidder1@example.com`)),
+    new User(
+      BIDDER_ONE_ID,
+      new Email(`${RUN_PREFIX}.bidder1@example.com`),
+      undefined,
+      'Postor Uno',
+    ),
   );
   await userRepository.save(
-    new User(BIDDER_TWO_ID, new Email(`${RUN_PREFIX}.bidder2@example.com`)),
+    new User(
+      BIDDER_TWO_ID,
+      new Email(`${RUN_PREFIX}.bidder2@example.com`),
+      undefined,
+      'Postor Dos',
+    ),
   );
 }
 
@@ -875,10 +980,9 @@ function openAuctionWithBid(suffix: string): Auction {
 }
 
 async function deletePaymentOrder(paymentOrderId: string): Promise<void> {
-  await database.query(
-    'DELETE FROM dbo.payment_orders WHERE id = @id;',
-    [{ name: 'id', type: mssql.NVarChar(100), value: paymentOrderId }],
-  );
+  await database.query('DELETE FROM dbo.payment_orders WHERE id = @id;', [
+    { name: 'id', type: mssql.NVarChar(100), value: paymentOrderId },
+  ]);
 }
 
 function listedAuction(
@@ -938,7 +1042,11 @@ function insertAuctionWithMissingSeller(): Promise<unknown> {
        1000, 100, @publishedAt, @closesAt, N'OPEN'
      );`,
     [
-      { name: 'id', type: mssql.NVarChar(100), value: id('missing-fk-auction') },
+      {
+        name: 'id',
+        type: mssql.NVarChar(100),
+        value: id('missing-fk-auction'),
+      },
       {
         name: 'sellerId',
         type: mssql.NVarChar(100),

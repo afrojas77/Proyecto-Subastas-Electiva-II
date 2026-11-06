@@ -11,7 +11,10 @@ import {
 } from '../../../domain/entities/rejected-bid-attempt';
 import { User } from '../../../domain/entities/user';
 import type { ProcessedPaymentEvent } from '../../../domain/ports/payment-event.repository';
-import { Article, type ConservationState } from '../../../domain/value-objects/article';
+import {
+  Article,
+  type ConservationState,
+} from '../../../domain/value-objects/article';
 import { AuctionStatus } from '../../../domain/value-objects/auction-status';
 import { Category } from '../../../domain/value-objects/category';
 import { Email } from '../../../domain/value-objects/email';
@@ -21,6 +24,7 @@ type SqlBigInt = number | string;
 
 export interface UserRow {
   id: string;
+  name: string | null;
   email: string;
   password_hash: string | null;
 }
@@ -89,6 +93,7 @@ export function restoreUser(row: UserRow): User {
     row.id,
     new Email(row.email),
     row.password_hash ?? undefined,
+    row.name ?? undefined,
   );
 }
 

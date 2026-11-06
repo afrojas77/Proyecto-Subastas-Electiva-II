@@ -21,6 +21,7 @@ import {
 } from '../request-helpers';
 import {
   presentAuction,
+  presentAuctionDetail,
   presentAuctionClosure,
   presentBid,
 } from '../presenters/auction.presenter';
@@ -63,7 +64,7 @@ export class AuctionController {
     const auction = await this.getAuction.execute(
       requireRouteId(request.params.id),
     );
-    response.status(200).json(presentAuction(auction));
+    response.status(200).json(presentAuctionDetail(auction));
   };
 
   list = async (request: Request, response: Response): Promise<void> => {

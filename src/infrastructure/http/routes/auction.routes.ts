@@ -9,7 +9,7 @@ export function createAuctionRouter(
   const router = Router();
 
   router.get('/', controller.list);
-  router.get('/:id', controller.get);
+  router.get('/:id', authenticate, controller.get);
   router.post('/', authenticate, controller.publish);
   router.post('/:id/bids', authenticate, controller.placeBid);
   router.get('/:id/bids', authenticate, controller.bidHistory);

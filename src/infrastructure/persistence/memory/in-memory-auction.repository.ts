@@ -12,20 +12,28 @@ export class InMemoryAuctionRepository implements AuctionRepository {
     return Promise.resolve(this.auctions.get(id));
   }
 
+  findBySellerId(sellerId: string): Promise<readonly Auction[]> {
+    return Promise.resolve(
+      this.sortedAuctions().filter((auction) => auction.sellerId === sellerId),
+    );
+  }
+
+  findByBidderId(bidderId: string): Promise<readonly Auction[]> {
+    return Promise.resolve(
+      this.sortedAuctions().filter((auction) =>
+        auction.acceptedBids.some((bid) => bid.bidderId === bidderId),
+      ),
+    );
+  }
+
   findPage(query: AuctionPageQuery): Promise<AuctionPage> {
-    const filtered = [...this.auctions.values()]
+    const filtered = this.sortedAuctions()
       .filter(
         (auction) =>
           !query.category || auction.category.name === query.category,
       )
       .filter(
-        (auction) =>
-          !query.status || auction.status.value === query.status,
-      )
-      .sort(
-        (left, right) =>
-          left.publishedAt.getTime() - right.publishedAt.getTime() ||
-          left.id.localeCompare(right.id),
+        (auction) => !query.status || auction.status.value === query.status,
       );
     const offset = (query.page - 1) * query.limit;
     return Promise.resolve({
@@ -37,5 +45,13 @@ export class InMemoryAuctionRepository implements AuctionRepository {
   save(auction: Auction): Promise<void> {
     this.auctions.set(auction.id, auction);
     return Promise.resolve();
+  }
+
+  private sortedAuctions(): Auction[] {
+    return [...this.auctions.values()].sort(
+      (left, right) =>
+        left.publishedAt.getTime() - right.publishedAt.getTime() ||
+        left.id.localeCompare(right.id),
+    );
   }
 }

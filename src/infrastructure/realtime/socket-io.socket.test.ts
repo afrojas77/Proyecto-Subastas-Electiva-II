@@ -52,10 +52,9 @@ describe('integración real de Socket.IO', () => {
     try {
       await expectConnectionError(context.baseUrl, {});
       await expectConnectionError(context.baseUrl, { token: 'invalid-token' });
-      const expiredToken = new JwtAccessTokenService(
-        TOKEN_SECRET,
-        -1,
-      ).issue({ userId: 'expired-user' }).token;
+      const expiredToken = new JwtAccessTokenService(TOKEN_SECRET, -1).issue({
+        userId: 'expired-user',
+      }).token;
       await expectConnectionError(context.baseUrl, { token: expiredToken });
 
       const userToken = tokenFor(context, 'user-1');
@@ -182,10 +181,7 @@ describe('integración real de Socket.IO', () => {
         challengerReceivedOutbid = true;
       });
       const publicSecondBid = [seller, bidder, challenger].map((client) =>
-        waitForEvent<Record<string, unknown>>(
-          client,
-          'auction:bid-accepted',
-        ),
+        waitForEvent<Record<string, unknown>>(client, 'auction:bid-accepted'),
       );
       await api
         .post('/api/auctions/auction-1/bids')
@@ -221,7 +217,10 @@ describe('integración real de Socket.IO', () => {
       bidder.once('auction:result', () => {
         losingBidderReceivedResult = true;
       });
-      await api.get('/api/auctions/auction-1').expect(200);
+      await api
+        .get('/api/auctions/auction-1')
+        .set('Authorization', bearer(context, 'seller-1'))
+        .expect(200);
 
       await expect(Promise.all(publicClosures)).resolves.toHaveLength(3);
       await expect(sellerResult).resolves.toEqual(

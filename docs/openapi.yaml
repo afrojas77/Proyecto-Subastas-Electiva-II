@@ -13,7 +13,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UserCredentials' }
+            schema: { $ref: '#/components/schemas/RegisterUserRequest' }
       responses:
         '201':
           description: Usuario registrado sin datos de credencial
@@ -29,7 +29,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UserCredentials' }
+            schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         '200':
           description: Token Bearer emitido correctamente
@@ -47,7 +47,7 @@ paths:
           description: Perfil propio sin hash de contraseña
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/UserProfile' }
+              schema: { $ref: '#/components/schemas/AuthenticatedProfile' }
         '401': { $ref: '#/components/responses/Unauthorized' }
   /api/auctions:
     get:
@@ -95,15 +95,17 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
   /api/auctions/{id}:
     get:
-      summary: Consulta una subasta
-      description: Si la subasta sigue abierta y el instante actual alcanzó closesAt, la cierra, adjudica y persiste la orden antes de responder.
+      summary: Consulta el detalle y el historial de una subasta
+      description: Requiere un usuario registrado. Si la subasta sigue abierta y el instante actual alcanzó closesAt, la cierra, adjudica y persiste la orden antes de responder.
+      security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/AuctionId' }]
       responses:
         '200':
           description: Subasta encontrada
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuctionSummary' }
+              schema: { $ref: '#/components/schemas/AuctionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/auctions/{id}/bids:
     get:
@@ -200,7 +202,7 @@ paths:
   /api/payment-orders/{id}:
     get:
       summary: Consulta una orden de pago como ganador
-      description: La identidad se obtiene exclusivamente del token y debe coincidir con el deudor ganador de la orden.
+      description: La identidad se obtiene exclusivamente del token y debe coincidir con el deudor ganador. Si la orden pendiente alcanzó dueAt, la consulta procesa atómicamente su vencimiento y el incumplimiento de la subasta antes de responder.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: id
@@ -229,22 +231,51 @@ components:
       required: true
       schema: { type: string }
   schemas:
-    UserCredentials:
+    RegisterUserRequest:
       type: object
-      required: [email, password]
+      required: [name, email, password]
       properties:
+        name: { type: string, maxLength: 200 }
         email: { type: string, format: email }
         password:
           type: string
           format: password
           minLength: 8
           description: Entre 8 caracteres y 72 bytes; nunca se devuelve.
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
     UserProfile:
       type: object
-      required: [id, email]
+      required: [id, name, email]
       properties:
         id: { type: string }
+        name: { type: string, nullable: true }
         email: { type: string, format: email }
+    ProfileAuctionSummary:
+      type: object
+      required: [id, category, status, closesAt]
+      properties:
+        id: { type: string }
+        category: { type: string }
+        status:
+          { type: string, enum: [OPEN, CANCELLED, CLOSED, DESERTED, DEFAULTED] }
+        closesAt: { type: string, format: date-time }
+    AuthenticatedProfile:
+      allOf:
+        - { $ref: '#/components/schemas/UserProfile' }
+        - type: object
+          required: [publishedAuctions, participatedAuctions]
+          properties:
+            publishedAuctions:
+              type: array
+              items: { $ref: '#/components/schemas/ProfileAuctionSummary' }
+            participatedAuctions:
+              type: array
+              items: { $ref: '#/components/schemas/ProfileAuctionSummary' }
     LoginResponse:
       type: object
       required: [accessToken, tokenType, expiresAt, user]
@@ -255,8 +286,7 @@ components:
         user: { $ref: '#/components/schemas/UserProfile' }
     PublishAuctionRequest:
       type: object
-      required:
-        [id, article, category, basePrice, minimumIncrement, closesAt]
+      required: [id, article, category, basePrice, minimumIncrement, closesAt]
       properties:
         id: { type: string }
         article:
@@ -280,7 +310,17 @@ components:
     AuctionSummary:
       type: object
       required:
-        [id, sellerId, article, category, basePrice, minimumIncrement, publishedAt, closesAt, status]
+        [
+          id,
+          sellerId,
+          article,
+          category,
+          basePrice,
+          minimumIncrement,
+          publishedAt,
+          closesAt,
+          status,
+        ]
       properties:
         id: { type: string }
         sellerId: { type: string }
@@ -304,6 +344,19 @@ components:
         limit: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }
         totalPages: { type: integer, minimum: 0 }
+    AuctionDetail:
+      allOf:
+        - { $ref: '#/components/schemas/AuctionSummary' }
+        - type: object
+          required: [highestBid, bids]
+          properties:
+            highestBid:
+              nullable: true
+              allOf:
+                - { $ref: '#/components/schemas/Bid' }
+            bids:
+              type: array
+              items: { $ref: '#/components/schemas/Bid' }
     Bid:
       type: object
       required: [id, bidderId, amount, placedAt, sequence]

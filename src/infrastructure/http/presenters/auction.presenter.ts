@@ -21,6 +21,16 @@ export function presentAuction(auction: Auction): Record<string, unknown> {
   };
 }
 
+export function presentAuctionDetail(
+  auction: Auction,
+): Record<string, unknown> {
+  return {
+    ...presentAuction(auction),
+    highestBid: auction.highestBid ? presentBid(auction.highestBid) : null,
+    bids: auction.acceptedBids.map(presentBid),
+  };
+}
+
 export function presentBid(bid: Bid): Record<string, unknown> {
   return {
     id: bid.id,

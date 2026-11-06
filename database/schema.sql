@@ -8,6 +8,7 @@ IF OBJECT_ID(N'dbo.users', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.users (
     id NVARCHAR(100) NOT NULL,
+    name NVARCHAR(200) NOT NULL,
     email NVARCHAR(320) COLLATE Latin1_General_100_CI_AI NOT NULL,
     -- Nullable para conservar usuarios académicos creados antes de autenticación.
     -- El endpoint de registro siempre persiste un hash bcrypt.
@@ -15,6 +16,15 @@ BEGIN
     CONSTRAINT PK_users PRIMARY KEY (id),
     CONSTRAINT UQ_users_email UNIQUE (email)
   );
+END;
+GO
+
+-- Los usuarios históricos pueden no tener nombre. Los registros nuevos siempre
+-- lo exigen en Domain y Application; la columna queda nullable solo al migrar
+-- una base académica existente para evitar inventar datos personales.
+IF COL_LENGTH(N'dbo.users', N'name') IS NULL
+BEGIN
+  ALTER TABLE dbo.users ADD name NVARCHAR(200) NULL;
 END;
 GO
 
@@ -209,6 +219,15 @@ IF NOT EXISTS (
     AND object_id = OBJECT_ID(N'dbo.auctions')
 )
   CREATE INDEX IX_auctions_status_closes_at ON dbo.auctions(status, closes_at);
+GO
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE name = N'IX_accepted_bids_bidder_auction'
+    AND object_id = OBJECT_ID(N'dbo.accepted_bids')
+)
+  CREATE INDEX IX_accepted_bids_bidder_auction
+    ON dbo.accepted_bids(bidder_id, auction_id);
 GO
 
 IF NOT EXISTS (

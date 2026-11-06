@@ -2,6 +2,7 @@ import type { PaymentOrder } from '../../domain/entities/payment-order';
 import type { PaymentOrderRepository } from '../../domain/ports/payment-order.repository';
 import { AuthorizationError } from '../errors/authorization.error';
 import { ResourceNotFoundError } from '../errors/resource-not-found.error';
+import type { ProcessPaymentOrderExpiration } from './process-payment-order-expiration';
 
 export interface GetPaymentOrderInput {
   paymentOrderId: string;
@@ -11,6 +12,7 @@ export interface GetPaymentOrderInput {
 export class GetPaymentOrder {
   constructor(
     private readonly paymentOrderRepository: PaymentOrderRepository,
+    private readonly processPaymentOrderExpiration?: ProcessPaymentOrderExpiration,
   ) {}
 
   async execute(input: GetPaymentOrderInput): Promise<PaymentOrder> {
@@ -18,16 +20,18 @@ export class GetPaymentOrder {
       input.paymentOrderId,
     );
     if (!order) {
-      throw new ResourceNotFoundError(
-        'Orden de pago',
-        input.paymentOrderId,
-      );
+      throw new ResourceNotFoundError('Orden de pago', input.paymentOrderId);
     }
     if (order.debtorId !== input.requesterId) {
       throw new AuthorizationError(
         'Sólo el ganador puede consultar esta orden de pago.',
       );
     }
-    return order;
+    await this.processPaymentOrderExpiration?.execute(order.id);
+    const currentOrder = await this.paymentOrderRepository.findById(order.id);
+    if (!currentOrder) {
+      throw new ResourceNotFoundError('Orden de pago', order.id);
+    }
+    return currentOrder;
   }
 }

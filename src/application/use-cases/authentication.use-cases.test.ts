@@ -10,7 +10,14 @@ import type {
 } from '../ports/access-token-service';
 import type { PasswordHasher } from '../ports/password-hasher';
 import { InvalidEmailError } from '../../domain/errors/invalid-email.error';
+import { Auction } from '../../domain/entities/auction';
+import { Bid } from '../../domain/entities/bid';
+import { Article } from '../../domain/value-objects/article';
+import { AuctionStatus } from '../../domain/value-objects/auction-status';
+import { Category } from '../../domain/value-objects/category';
+import { Money } from '../../domain/value-objects/money';
 import { InMemoryUserRepository } from '../../infrastructure/persistence/memory/in-memory-user.repository';
+import { InMemoryAuctionRepository } from '../../infrastructure/persistence/memory/in-memory-auction.repository';
 import { GetAuthenticatedProfile } from './get-authenticated-profile';
 import { LoginUser } from './login-user';
 import { RegisterUser } from './register-user';
@@ -47,6 +54,7 @@ class RecordingTokenService implements AccessTokenService {
 
 function setup() {
   const repository = new InMemoryUserRepository();
+  const auctionRepository = new InMemoryAuctionRepository();
   const hasher = new RecordingPasswordHasher();
   const tokens = new RecordingTokenService();
   const register = new RegisterUser(repository, hasher, {
@@ -54,11 +62,12 @@ function setup() {
   });
   return {
     repository,
+    auctionRepository,
     hasher,
     tokens,
     register,
     login: new LoginUser(repository, hasher, tokens),
-    profile: new GetAuthenticatedProfile(repository),
+    profile: new GetAuthenticatedProfile(repository, auctionRepository),
   };
 }
 
@@ -67,12 +76,17 @@ describe('casos de uso de autenticación', () => {
     const context = setup();
 
     const result = await context.register.execute({
+      name: '  Andrea Rojas  ',
       email: '  USER@EXAMPLE.COM ',
       password: 'correct-password',
     });
     const stored = await context.repository.findById('user-1');
 
-    expect(result).toEqual({ id: 'user-1', email: 'user@example.com' });
+    expect(result).toEqual({
+      id: 'user-1',
+      name: 'Andrea Rojas',
+      email: 'user@example.com',
+    });
     expect(result).not.toHaveProperty('passwordHash');
     expect(stored?.passwordHash).toBe('hash::correct-password');
     expect(stored?.passwordHash).not.toBe('correct-password');
@@ -81,21 +95,28 @@ describe('casos de uso de autenticación', () => {
   it('rechaza correo duplicado, correo inválido y contraseña inválida', async () => {
     const context = setup();
     await context.register.execute({
+      name: 'Andrea Rojas',
       email: 'user@example.com',
       password: 'correct-password',
     });
 
     await expect(
       context.register.execute({
+        name: 'Andrea Rojas',
         email: 'USER@example.com',
         password: 'another-password',
       }),
     ).rejects.toBeInstanceOf(DuplicateEmailError);
     await expect(
-      context.register.execute({ email: 'invalid', password: 'password' }),
+      context.register.execute({
+        name: 'Andrea Rojas',
+        email: 'invalid',
+        password: 'password',
+      }),
     ).rejects.toBeInstanceOf(InvalidEmailError);
     await expect(
       context.register.execute({
+        name: 'Andrea Rojas',
         email: 'other@example.com',
         password: 'short',
       }),
@@ -105,6 +126,7 @@ describe('casos de uso de autenticación', () => {
   it('inicia sesión con credenciales correctas y emite token con expiración', async () => {
     const context = setup();
     await context.register.execute({
+      name: 'Andrea Rojas',
       email: 'user@example.com',
       password: 'correct-password',
     });
@@ -127,6 +149,7 @@ describe('casos de uso de autenticación', () => {
   ])('no distingue credenciales inválidas para %s', async (email, password) => {
     const context = setup();
     await context.register.execute({
+      name: 'Andrea Rojas',
       email: 'user@example.com',
       password: 'correct-password',
     });
@@ -139,16 +162,74 @@ describe('casos de uso de autenticación', () => {
   it('obtiene el perfil propio y rechaza una identidad inexistente', async () => {
     const context = setup();
     await context.register.execute({
+      name: 'Andrea Rojas',
       email: 'user@example.com',
       password: 'correct-password',
     });
 
     await expect(context.profile.execute('user-1')).resolves.toEqual({
       id: 'user-1',
+      name: 'Andrea Rojas',
       email: 'user@example.com',
+      publishedAuctions: [],
+      participatedAuctions: [],
     });
     await expect(context.profile.execute('missing')).rejects.toBeInstanceOf(
       AuthenticationRequiredError,
     );
   });
+
+  it('incluye las subastas publicadas y aquellas en las que participó', async () => {
+    const context = setup();
+    await context.register.execute({
+      name: 'Andrea Rojas',
+      email: 'user@example.com',
+      password: 'correct-password',
+    });
+    await context.auctionRepository.save(profileAuction('published', 'user-1'));
+    await context.auctionRepository.save(
+      profileAuction('participated', 'other-seller', 'user-1'),
+    );
+
+    const profile = await context.profile.execute('user-1');
+
+    expect(profile.publishedAuctions.map(({ id }) => id)).toEqual([
+      'published',
+    ]);
+    expect(profile.participatedAuctions.map(({ id }) => id)).toEqual([
+      'participated',
+    ]);
+  });
 });
+
+function profileAuction(
+  id: string,
+  sellerId: string,
+  bidderId?: string,
+): Auction {
+  const publishedAt = new Date('2026-01-01T12:00:00.000Z');
+  return Auction.restore({
+    id,
+    sellerId,
+    article: new Article('Libro', 'Primera edición', 'USED'),
+    category: new Category('Libros'),
+    basePrice: new Money(100_000),
+    minimumIncrement: new Money(10_000),
+    publishedAt,
+    closesAt: new Date('2026-01-02T12:00:00.000Z'),
+    status: AuctionStatus.OPEN,
+    acceptedBids: bidderId
+      ? [
+          new Bid(
+            `${id}-bid`,
+            id,
+            bidderId,
+            new Money(100_000),
+            new Date('2026-01-01T13:00:00.000Z'),
+            1,
+          ),
+        ]
+      : [],
+    rejectedBidAttempts: [],
+  });
+}

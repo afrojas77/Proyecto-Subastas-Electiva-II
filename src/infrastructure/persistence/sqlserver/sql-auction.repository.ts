@@ -25,6 +25,36 @@ export class SqlAuctionRepository implements AuctionRepository {
     return this.database.transaction((executor) => this.loadById(executor, id));
   }
 
+  findBySellerId(sellerId: string): Promise<readonly Auction[]> {
+    return this.database.transaction(async (executor) => {
+      const result = await executor.query<{ id: string }>(
+        `SELECT id
+         FROM dbo.auctions
+         WHERE seller_id = @userId
+         ORDER BY published_at, id;`,
+        [{ name: 'userId', type: mssql.NVarChar(100), value: sellerId }],
+      );
+      return this.loadManyById(executor, result.recordset);
+    });
+  }
+
+  findByBidderId(bidderId: string): Promise<readonly Auction[]> {
+    return this.database.transaction(async (executor) => {
+      const result = await executor.query<{ id: string }>(
+        `SELECT a.id
+         FROM dbo.auctions AS a
+         WHERE EXISTS (
+           SELECT 1
+           FROM dbo.accepted_bids AS b
+           WHERE b.auction_id = a.id AND b.bidder_id = @userId
+         )
+         ORDER BY a.published_at, a.id;`,
+        [{ name: 'userId', type: mssql.NVarChar(100), value: bidderId }],
+      );
+      return this.loadManyById(executor, result.recordset);
+    });
+  }
+
   private async loadById(
     executor: SqlExecutor,
     id: string,
@@ -78,6 +108,20 @@ export class SqlAuctionRepository implements AuctionRepository {
     );
     this.aggregateVersions.set(auction, Number(auctionRow.version));
     return auction;
+  }
+
+  private async loadManyById(
+    executor: SqlExecutor,
+    rows: readonly { id: string }[],
+  ): Promise<readonly Auction[]> {
+    const auctions: Auction[] = [];
+    for (const row of rows) {
+      const auction = await this.loadById(executor, row.id);
+      if (auction) {
+        auctions.push(auction);
+      }
+    }
+    return auctions;
   }
 
   findPage(query: AuctionPageQuery): Promise<AuctionPage> {

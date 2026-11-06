@@ -14,6 +14,7 @@ export class UserController {
   register = async (request: Request, response: Response): Promise<void> => {
     const body = requireBody(request.body);
     const profile = await this.registerUser.execute({
+      name: requireString(body, 'name'),
       email: requireString(body, 'email'),
       password: requireString(body, 'password'),
     });

@@ -9,6 +9,7 @@ import { GetAuction } from './application/use-cases/get-auction';
 import { ListAuctions } from './application/use-cases/list-auctions';
 import { PlaceBid } from './application/use-cases/place-bid';
 import { ProcessPaymentNotification } from './application/use-cases/process-payment-notification';
+import { ProcessPaymentOrderExpiration } from './application/use-cases/process-payment-order-expiration';
 import { ProcessAuctionClosure } from './application/use-cases/process-auction-closure';
 import { PublishAuction } from './application/use-cases/publish-auction';
 import { GetAuthenticatedProfile } from './application/use-cases/get-authenticated-profile';
@@ -89,6 +90,13 @@ export function createApp(dependencies: AppDependencies) {
     dependencies.realtimeEventPublisher,
     dependencies.persistenceTransaction,
   );
+  const processPaymentOrderExpiration = new ProcessPaymentOrderExpiration(
+    paymentOrderRepository,
+    auctionRepository,
+    clock,
+    dependencies.realtimeEventPublisher,
+    dependencies.persistenceTransaction,
+  );
   const auctionController = new AuctionController(
     new PublishAuction(auctionRepository, clock),
     new GetAuction(auctionRepository, processAuctionClosure),
@@ -111,14 +119,15 @@ export function createApp(dependencies: AppDependencies) {
       paymentEventRepository,
       dependencies.realtimeEventPublisher,
       dependencies.persistenceTransaction,
+      processPaymentOrderExpiration,
     ),
   );
   const paymentOrderController = new PaymentOrderController(
-    new GetPaymentOrder(paymentOrderRepository),
+    new GetPaymentOrder(paymentOrderRepository, processPaymentOrderExpiration),
   );
   const userController = new UserController(
     new RegisterUser(userRepository, passwordHasher, idGenerator),
-    new GetAuthenticatedProfile(userRepository),
+    new GetAuthenticatedProfile(userRepository, auctionRepository),
   );
   const authController = new AuthController(
     new LoginUser(userRepository, passwordHasher, accessTokenService),

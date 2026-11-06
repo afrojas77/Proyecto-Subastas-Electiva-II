@@ -32,6 +32,7 @@ function body<T>(response: SupertestResponse): T {
 
 async function register(api: ReturnType<typeof request>) {
   return api.post('/api/users/register').send({
+    name: 'Andrea Rojas',
     email: 'USER@EXAMPLE.COM',
     password: 'correct-password',
   });
@@ -54,6 +55,7 @@ describe('API de usuarios y autenticación', () => {
     expect(response.status).toBe(201);
     expect(body<Record<string, unknown>>(response)).toEqual({
       id: 'user-1',
+      name: 'Andrea Rojas',
       email: 'user@example.com',
     });
     expect(response.body).not.toHaveProperty('password');
@@ -68,12 +70,18 @@ describe('API de usuarios y autenticación', () => {
 
     const duplicate = await register(context.api);
     const invalidEmail = await context.api.post('/api/users/register').send({
+      name: 'Andrea Rojas',
       email: 'invalid',
       password: 'correct-password',
     });
     const invalidPassword = await context.api.post('/api/users/register').send({
+      name: 'Andrea Rojas',
       email: 'other@example.com',
       password: 'short',
+    });
+    const missingName = await context.api.post('/api/users/register').send({
+      email: 'without-name@example.com',
+      password: 'correct-password',
     });
 
     expect(duplicate.status).toBe(409);
@@ -82,9 +90,10 @@ describe('API de usuarios y autenticación', () => {
     );
     expect(invalidEmail.status).toBe(400);
     expect(invalidPassword.status).toBe(400);
-    expect(
-      body<{ error: { code: string } }>(invalidPassword).error.code,
-    ).toBe('INVALID_PASSWORD');
+    expect(missingName.status).toBe(400);
+    expect(body<{ error: { code: string } }>(invalidPassword).error.code).toBe(
+      'INVALID_PASSWORD',
+    );
   });
 
   it('inicia sesión y devuelve token Bearer con expiración y perfil seguro', async () => {
@@ -103,7 +112,11 @@ describe('API de usuarios y autenticación', () => {
     expect(result.tokenType).toBe('Bearer');
     expect(result.accessToken).toEqual(expect.any(String));
     expect(new Date(result.expiresAt).getTime()).toBeGreaterThan(Date.now());
-    expect(result.user).toEqual({ id: 'user-1', email: 'user@example.com' });
+    expect(result.user).toEqual({
+      id: 'user-1',
+      name: 'Andrea Rojas',
+      email: 'user@example.com',
+    });
     expect(result.user).not.toHaveProperty('passwordHash');
   });
 
@@ -138,7 +151,10 @@ describe('API de usuarios y autenticación', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       id: 'user-1',
+      name: 'Andrea Rojas',
       email: 'user@example.com',
+      publishedAuctions: [],
+      participatedAuctions: [],
     });
   });
 

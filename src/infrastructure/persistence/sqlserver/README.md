@@ -4,7 +4,7 @@ Esta carpeta implementa los puertos `AuctionRepository`, `UserRepository`, `Paym
 
 ## Modelo relacional
 
-- `users`: identidad, correo normalizado y hash bcrypt; el correo tiene restricción única con colación insensible a mayúsculas y minúsculas. El hash es nullable para conservar filas académicas anteriores, que no pueden autenticarse.
+- `users`: identidad, nombre, correo normalizado y hash bcrypt; el correo tiene restricción única con colación insensible a mayúsculas y minúsculas. Nombre y hash pueden quedar nulos únicamente en filas académicas anteriores a sus migraciones; el registro actual siempre exige ambos.
 - `auctions`: datos inmutables del artículo, categoría, precios, fechas y estado actual.
 - `accepted_bids`: pujas aceptadas con ID, postor, importe, instante y secuencia única por subasta.
 - `rejected_bid_attempts`: auditoría de intentos rechazados, motivo y orden de reconstrucción.
@@ -34,7 +34,7 @@ No se registran contraseñas. El pool se crea una vez en el arranque y se cierra
 
 ## Esquema
 
-Ejecuta `database/schema.sql` sobre una instalación nueva. Para una base creada antes de autenticación, ejecuta `database/migrations/002_add_user_password_hash.sql`; es idempotente, no borra filas y sólo añade `password_hash`. El esquema general también contiene esa comprobación para que pueda repetirse con seguridad.
+Ejecuta `database/schema.sql` sobre una instalación nueva. Para una base creada antes de autenticación, ejecuta `database/migrations/002_add_user_password_hash.sql`; para incorporar el nombre de RF-01 sobre una base existente, ejecuta `database/migrations/003_add_user_name.sql`. Ambas son idempotentes y no inventan ni eliminan datos históricos. El esquema general también contiene esas comprobaciones para que pueda repetirse con seguridad.
 
 ## Mapeo y consultas
 
@@ -50,7 +50,7 @@ Los mapeadores usan `Auction.restore()` y `PaymentOrder.restore()`; no simulan p
 
 Socket.IO permanece fuera de la transacción SQL. Los eventos se emiten sólo después del commit, pero no existe outbox ni entrega durable: una caída entre el commit y la emisión puede perder la notificación, y un error de transporte no revierte los datos ya confirmados.
 
-El listado de subastas aplica categoría, estado, conteo y `OFFSET/FETCH` directamente en SQL mediante parámetros. El orden estable por `published_at, id` permite recorrer páginas de forma determinista; sólo se reconstruyen los agregados incluidos en la página solicitada. El esquema crea un índice compuesto para esta consulta.
+El listado de subastas aplica categoría, estado, conteo y `OFFSET/FETCH` directamente en SQL mediante parámetros. El orden estable por `published_at, id` permite recorrer páginas de forma determinista; sólo se reconstruyen los agregados incluidos en la página solicitada. Las consultas de perfil recuperan por separado las subastas publicadas y las participadas mediante vendedor y existencia de pujas aceptadas, sin cargar el catálogo completo en memoria. El esquema crea un índice compuesto para estas consultas principales.
 
 Las pruebas normales usan dobles de `SqlDatabase`; validan mapeo, parámetros y
 manejo de errores sin requerir SQL Server. La suite separada descrita a

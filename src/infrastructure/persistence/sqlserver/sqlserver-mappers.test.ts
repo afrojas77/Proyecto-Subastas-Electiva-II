@@ -106,6 +106,7 @@ describe('mapeadores SQL Server', () => {
     const processedEvent = restoreProcessedPaymentEvent(eventRow);
     const user = restoreUser({
       id: 'user-1',
+      name: 'Andrea Rojas',
       email: 'USER@EXAMPLE.COM',
       password_hash: 'stored-hash',
     });
@@ -120,6 +121,7 @@ describe('mapeadores SQL Server', () => {
       orderStatus: 'PAID',
     });
     expect(user.email.value).toBe('user@example.com');
+    expect(user.name).toBe('Andrea Rojas');
     expect(user.passwordHash).toBe('stored-hash');
   });
 });

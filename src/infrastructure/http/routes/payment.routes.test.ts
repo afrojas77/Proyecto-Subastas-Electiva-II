@@ -4,9 +4,15 @@ import type { Response as SupertestResponse } from 'supertest';
 
 import { createApp } from '../../../app';
 import type { RealtimeEventPublisher } from '../../../application/ports/realtime-event-publisher';
+import { Auction } from '../../../domain/entities/auction';
+import { Bid } from '../../../domain/entities/bid';
 import { PaymentOrder } from '../../../domain/entities/payment-order';
+import { Article } from '../../../domain/value-objects/article';
+import { AuctionStatus } from '../../../domain/value-objects/auction-status';
+import { Category } from '../../../domain/value-objects/category';
 import { Money } from '../../../domain/value-objects/money';
 import { DevelopmentOnlyPaymentNotificationVerifier } from '../../payments/development-only-payment-notification-verifier';
+import { InMemoryAuctionRepository } from '../../persistence/memory/in-memory-auction.repository';
 import { InMemoryPaymentEventRepository } from '../../persistence/memory/in-memory-payment-event.repository';
 import { InMemoryPaymentOrderRepository } from '../../persistence/memory/in-memory-payment-order.repository';
 import { SIMULATED_PAYMENT_SECRET_HEADER } from '../controllers/payment.controller';
@@ -22,7 +28,8 @@ const VALID_PAYLOAD = {
   occurredAt: '2026-01-01T13:00:00.000Z',
 };
 
-async function setupApi() {
+async function setupApi(now = new Date('2026-01-01T13:00:00.000Z')) {
+  const auctionRepository = new InMemoryAuctionRepository();
   const paymentOrderRepository = new InMemoryPaymentOrderRepository();
   const paymentEventRepository = new InMemoryPaymentEventRepository();
   const order = PaymentOrder.create(
@@ -32,16 +39,43 @@ async function setupApi() {
     new Money(100_000),
     new Date('2026-01-01T12:00:00.000Z'),
   );
+  const bid = new Bid(
+    'bid-1',
+    'auction-1',
+    'bidder-1',
+    new Money(100_000),
+    new Date('2026-01-01T11:00:00.000Z'),
+    1,
+  );
+  const auction = Auction.restore({
+    id: 'auction-1',
+    sellerId: 'seller-1',
+    article: new Article('Reloj', 'Reloj mecánico', 'USED'),
+    category: new Category('Coleccionables'),
+    basePrice: new Money(100_000),
+    minimumIncrement: new Money(10_000),
+    publishedAt: new Date('2026-01-01T10:00:00.000Z'),
+    closesAt: new Date('2026-01-01T12:00:00.000Z'),
+    status: AuctionStatus.CLOSED,
+    acceptedBids: [bid],
+    rejectedBidAttempts: [],
+    closure: { winningBidId: bid.id, paymentOrder: order },
+  });
   await paymentOrderRepository.save(order);
+  await auctionRepository.save(auction);
   const app = createApp({
+    auctionRepository,
+    clock: { now: () => new Date(now.getTime()) },
     realtimeEventPublisher: silentPublisher,
     paymentOrderRepository,
     paymentEventRepository,
-    paymentNotificationVerifier:
-      new DevelopmentOnlyPaymentNotificationVerifier(WEBHOOK_SECRET),
+    paymentNotificationVerifier: new DevelopmentOnlyPaymentNotificationVerifier(
+      WEBHOOK_SECRET,
+    ),
   });
   return {
     api: request(app),
+    auction,
     order,
     paymentEventRepository,
   };
@@ -136,9 +170,9 @@ describe('POST /api/payments/webhook', () => {
       .send(VALID_PAYLOAD);
 
     expect(conflict.status).toBe(409);
-    expect(
-      responseBody<{ error: { code: string } }>(conflict).error.code,
-    ).toBe('PAYMENT_EVENT_CONFLICT');
+    expect(responseBody<{ error: { code: string } }>(conflict).error.code).toBe(
+      'PAYMENT_EVENT_CONFLICT',
+    );
     expect(context.order.status).toBe('PENDING');
   });
 
@@ -159,6 +193,7 @@ describe('POST /api/payments/webhook', () => {
   it('responde conflicto cuando la orden no permite confirmación', async () => {
     const context = await setupApi();
     context.order.expire(context.order.dueAt);
+    context.auction.markAsDefaulted(context.order);
 
     const response = await context.api
       .post('/api/payments/webhook')
@@ -169,6 +204,25 @@ describe('POST /api/payments/webhook', () => {
     expect(responseBody<{ error: { code: string } }>(response).error.code).toBe(
       'INVALID_PAYMENT_ORDER_STATE',
     );
+    expect(
+      await context.paymentEventRepository.findById('event-1'),
+    ).toBeUndefined();
+  });
+
+  it('vence una orden atrasada antes de aceptar una confirmación tardía', async () => {
+    const context = await setupApi(new Date('2026-01-03T12:00:00.000Z'));
+
+    const response = await context.api
+      .post('/api/payments/webhook')
+      .set(SIMULATED_PAYMENT_SECRET_HEADER, WEBHOOK_SECRET)
+      .send({
+        ...VALID_PAYLOAD,
+        occurredAt: '2026-01-03T12:00:00.000Z',
+      });
+
+    expect(response.status).toBe(409);
+    expect(context.order.status).toBe('EXPIRED');
+    expect(context.auction.status).toBe(AuctionStatus.DEFAULTED);
     expect(
       await context.paymentEventRepository.findById('event-1'),
     ).toBeUndefined();

@@ -6,11 +6,7 @@ import { PaymentOrder } from '../../../domain/entities/payment-order';
 import { User } from '../../../domain/entities/user';
 import type { ProcessedPaymentEvent } from '../../../domain/ports/payment-event.repository';
 import { Email } from '../../../domain/value-objects/email';
-import type {
-  SqlDatabase,
-  SqlParameter,
-  SqlQueryResult,
-} from './sql-executor';
+import type { SqlDatabase, SqlParameter, SqlQueryResult } from './sql-executor';
 import { SqlAuctionRepository } from './sql-auction.repository';
 import { SqlPaymentEventRepository } from './sql-payment-event.repository';
 import { SqlPaymentOrderRepository } from './sql-payment-order.repository';
@@ -125,10 +121,12 @@ describe('repositorios SQL Server', () => {
       'user-1',
       new Email('USER@EXAMPLE.COM'),
       'stored-password-hash',
+      'Andrea Rojas',
     );
     database.enqueue([{ exists: 1 }]);
     const row: UserRow = {
       id: 'user-1',
+      name: 'Andrea Rojas',
       email: 'user@example.com',
       password_hash: 'stored-password-hash',
     };
@@ -136,17 +134,14 @@ describe('repositorios SQL Server', () => {
     database.enqueue<UserRow>([row]);
 
     expect(await repository.existsByEmail(user.email)).toBe(true);
-    expect((await repository.findById(user.id))?.email.value).toBe(
-      'user@example.com',
-    );
-    expect((await repository.findByEmail(user.email))?.passwordHash).toBe(
-      'stored-password-hash',
-    );
+    const restoredById = await repository.findById(user.id);
+    const restoredByEmail = await repository.findByEmail(user.email);
+    expect(restoredById?.email.value).toBe('user@example.com');
+    expect(restoredByEmail?.passwordHash).toBe('stored-password-hash');
+    expect(restoredByEmail?.name).toBe('Andrea Rojas');
     await repository.save(user);
 
-    expect(parameterValue(database.calls[0], 'email')).toBe(
-      'user@example.com',
-    );
+    expect(parameterValue(database.calls[0], 'email')).toBe('user@example.com');
     expect(database.calls[3]?.statement).toContain('MERGE dbo.users');
     expect(parameterValue(database.calls[3], 'passwordHash')).toBe(
       'stored-password-hash',
@@ -220,9 +215,7 @@ describe('repositorios SQL Server', () => {
     });
 
     expect(page.total).toBe(3);
-    expect(page.items.map((auction) => auction.id)).toEqual([
-      'auction-page-1',
-    ]);
+    expect(page.items.map((auction) => auction.id)).toEqual(['auction-page-1']);
     expect(database.transactionCount).toBe(1);
     expect(database.calls[0]?.statement).toContain('COUNT(*)');
     expect(database.calls[1]?.statement).toContain('OFFSET @offset ROWS');
@@ -236,9 +229,10 @@ describe('repositorios SQL Server', () => {
   it('guarda el agregado de subasta dentro de una transacción', async () => {
     const database = new FakeSqlDatabase();
     const repository = new SqlAuctionRepository(database);
-    const auction = (await createOpenAuction(database, repository)) as NonNullable<
-      Awaited<ReturnType<SqlAuctionRepository['findById']>>
-    >;
+    const auction = (await createOpenAuction(
+      database,
+      repository,
+    )) as NonNullable<Awaited<ReturnType<SqlAuctionRepository['findById']>>>;
     database.transactionCount = 0;
     database.enqueue([{ version: 1 }]);
 
@@ -247,7 +241,9 @@ describe('repositorios SQL Server', () => {
     expect(database.transactionCount).toBe(1);
     expect(
       database.calls.some((call) =>
-        call.statement.includes('WHERE id = @id AND version = @expectedVersion'),
+        call.statement.includes(
+          'WHERE id = @id AND version = @expectedVersion',
+        ),
       ),
     ).toBe(true);
     expect(
@@ -303,9 +299,6 @@ async function createOpenAuction(
   return repository.findById('auction-1');
 }
 
-function parameterValue(
-  call: QueryCall | undefined,
-  name: string,
-): unknown {
+function parameterValue(call: QueryCall | undefined, name: string): unknown {
   return call?.parameters.find((parameter) => parameter.name === name)?.value;
 }

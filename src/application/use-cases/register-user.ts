@@ -8,6 +8,7 @@ import { Email } from '../../domain/value-objects/email';
 import { toUserProfile, type UserProfile } from './user-profile';
 
 export interface RegisterUserCommand {
+  readonly name: string;
   readonly email: string;
   readonly password: string;
 }
@@ -26,7 +27,12 @@ export class RegisterUser {
       throw new DuplicateEmailError();
     }
     const passwordHash = await this.passwordHasher.hash(command.password);
-    const user = new User(this.idGenerator.generate(), email, passwordHash);
+    const user = new User(
+      this.idGenerator.generate(),
+      email,
+      passwordHash,
+      command.name,
+    );
     await this.userRepository.save(user);
     return toUserProfile(user);
   }
