@@ -9,6 +9,9 @@ import { toUserProfile, type UserProfile } from './user-profile';
 
 export interface RegisterUserCommand {
   readonly name: string;
+  readonly documentType?: string;
+  readonly documentNumber?: string;
+  readonly phone?: string;
   readonly email: string;
   readonly password: string;
 }
@@ -32,6 +35,9 @@ export class RegisterUser {
       email,
       passwordHash,
       command.name,
+      command.documentType,
+      command.documentNumber,
+      command.phone,
     );
     await this.userRepository.save(user);
     return toUserProfile(user);

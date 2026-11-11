@@ -4,18 +4,22 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['coverage/', 'dist/', 'node_modules/'],
+    ignores: ['**/coverage/**', '**/dist/**', '**/node_modules/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
     ...config,
-    files: ['**/*.ts'],
+    files: ['**/*.{ts,tsx}'],
   })),
   {
-    files: ['**/*.ts'],
+    files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
-        project: './tsconfig.eslint.json',
+        project: [
+          './tsconfig.eslint.json',
+          './frontend/tsconfig.app.json',
+          './frontend/tsconfig.node.json',
+        ],
         tsconfigRootDir: import.meta.dirname,
       },
     },

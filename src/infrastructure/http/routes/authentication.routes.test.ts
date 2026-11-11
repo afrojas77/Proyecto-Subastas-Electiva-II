@@ -33,6 +33,9 @@ function body<T>(response: SupertestResponse): T {
 async function register(api: ReturnType<typeof request>) {
   return api.post('/api/users/register').send({
     name: 'Andrea Rojas',
+    documentType: 'CC',
+    documentNumber: '1032456789',
+    phone: '3001234567',
     email: 'USER@EXAMPLE.COM',
     password: 'correct-password',
   });
@@ -57,6 +60,9 @@ describe('API de usuarios y autenticación', () => {
       id: 'user-1',
       name: 'Andrea Rojas',
       email: 'user@example.com',
+      documentType: 'CC',
+      documentNumber: '1032456789',
+      phone: '3001234567',
     });
     expect(response.body).not.toHaveProperty('password');
     expect(response.body).not.toHaveProperty('passwordHash');
@@ -71,11 +77,17 @@ describe('API de usuarios y autenticación', () => {
     const duplicate = await register(context.api);
     const invalidEmail = await context.api.post('/api/users/register').send({
       name: 'Andrea Rojas',
+      documentType: 'CC',
+      documentNumber: '1032456789',
+      phone: '3001234567',
       email: 'invalid',
       password: 'correct-password',
     });
     const invalidPassword = await context.api.post('/api/users/register').send({
       name: 'Andrea Rojas',
+      documentType: 'CC',
+      documentNumber: '1032456789',
+      phone: '3001234567',
       email: 'other@example.com',
       password: 'short',
     });
@@ -116,6 +128,9 @@ describe('API de usuarios y autenticación', () => {
       id: 'user-1',
       name: 'Andrea Rojas',
       email: 'user@example.com',
+      documentType: 'CC',
+      documentNumber: '1032456789',
+      phone: '3001234567',
     });
     expect(result.user).not.toHaveProperty('passwordHash');
   });
@@ -153,6 +168,9 @@ describe('API de usuarios y autenticación', () => {
       id: 'user-1',
       name: 'Andrea Rojas',
       email: 'user@example.com',
+      documentType: 'CC',
+      documentNumber: '1032456789',
+      phone: '3001234567',
       publishedAuctions: [],
       participatedAuctions: [],
     });

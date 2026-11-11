@@ -37,6 +37,8 @@ npm run dev
 
 De forma predeterminada, la API y Socket.IO comparten el servidor HTTP en `http://localhost:3000`.
 
+El cliente React se encuentra en `frontend/`. Después de instalar sus dependencias con `npm --prefix frontend install`, puede iniciarse desde la raíz con `npm run frontend:dev`; Vite lo sirve en `http://localhost:3001` y redirige `/api` a la API local en el puerto `3000`. El login ya consume `POST /api/auth/login` y mantiene sus dependencias separadas de las del backend.
+
 Comprobar el servidor:
 
 ```bash

@@ -21,7 +21,7 @@ export class SqlUserRepository implements UserRepository {
 
   async findById(id: string): Promise<User | undefined> {
     const result = await this.database.query<UserRow>(
-      `SELECT id, name, email, password_hash
+      `SELECT id, name, email, password_hash, document_type, document_number, phone
        FROM dbo.users
        WHERE id = @id;`,
       [{ name: 'id', type: mssql.NVarChar(100), value: id }],
@@ -32,7 +32,7 @@ export class SqlUserRepository implements UserRepository {
 
   async findByEmail(email: Email): Promise<User | undefined> {
     const result = await this.database.query<UserRow>(
-      `SELECT id, name, email, password_hash
+      `SELECT id, name, email, password_hash, document_type, document_number, phone
        FROM dbo.users
        WHERE email = @email;`,
       [{ name: 'email', type: mssql.NVarChar(320), value: email.value }],
@@ -46,15 +46,21 @@ export class SqlUserRepository implements UserRepository {
       `MERGE dbo.users AS target
        USING (
          SELECT @id AS id, @name AS name, @email AS email,
-                @passwordHash AS password_hash
+                @passwordHash AS password_hash, @documentType AS document_type,
+                @documentNumber AS document_number, @phone AS phone
        ) AS source
        ON target.id = source.id
        WHEN MATCHED THEN UPDATE SET
          name = COALESCE(source.name, target.name),
          email = source.email,
-         password_hash = COALESCE(source.password_hash, target.password_hash)
-       WHEN NOT MATCHED THEN INSERT (id, name, email, password_hash)
-         VALUES (source.id, source.name, source.email, source.password_hash);`,
+         password_hash = COALESCE(source.password_hash, target.password_hash),
+         document_type = COALESCE(source.document_type, target.document_type),
+         document_number = COALESCE(source.document_number, target.document_number),
+         phone = COALESCE(source.phone, target.phone)
+       WHEN NOT MATCHED THEN INSERT
+         (id, name, email, password_hash, document_type, document_number, phone)
+         VALUES (source.id, source.name, source.email, source.password_hash,
+                 source.document_type, source.document_number, source.phone);`,
       [
         { name: 'id', type: mssql.NVarChar(100), value: user.id },
         {
@@ -71,6 +77,21 @@ export class SqlUserRepository implements UserRepository {
           name: 'passwordHash',
           type: mssql.NVarChar(255),
           value: user.passwordHash ?? null,
+        },
+        {
+          name: 'documentType',
+          type: mssql.NVarChar(20),
+          value: user.documentType ?? null,
+        },
+        {
+          name: 'documentNumber',
+          type: mssql.NVarChar(30),
+          value: user.documentNumber ?? null,
+        },
+        {
+          name: 'phone',
+          type: mssql.NVarChar(16),
+          value: user.phone ?? null,
         },
       ],
     );

@@ -13,10 +13,25 @@ BEGIN
     -- Nullable para conservar usuarios académicos creados antes de autenticación.
     -- El endpoint de registro siempre persiste un hash bcrypt.
     password_hash NVARCHAR(255) NULL,
+    document_type NVARCHAR(20) NULL,
+    document_number NVARCHAR(30) NULL,
+    phone NVARCHAR(16) NULL,
     CONSTRAINT PK_users PRIMARY KEY (id),
     CONSTRAINT UQ_users_email UNIQUE (email)
   );
 END;
+GO
+
+IF COL_LENGTH(N'dbo.users', N'document_type') IS NULL
+  ALTER TABLE dbo.users ADD document_type NVARCHAR(20) NULL;
+GO
+
+IF COL_LENGTH(N'dbo.users', N'document_number') IS NULL
+  ALTER TABLE dbo.users ADD document_number NVARCHAR(30) NULL;
+GO
+
+IF COL_LENGTH(N'dbo.users', N'phone') IS NULL
+  ALTER TABLE dbo.users ADD phone NVARCHAR(16) NULL;
 GO
 
 -- Los usuarios históricos pueden no tener nombre. Los registros nuevos siempre

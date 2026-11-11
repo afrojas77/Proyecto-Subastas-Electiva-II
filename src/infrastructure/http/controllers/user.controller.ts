@@ -15,6 +15,9 @@ export class UserController {
     const body = requireBody(request.body);
     const profile = await this.registerUser.execute({
       name: requireString(body, 'name'),
+      documentType: requireString(body, 'documentType'),
+      documentNumber: requireString(body, 'documentNumber'),
+      phone: requireString(body, 'phone'),
       email: requireString(body, 'email'),
       password: requireString(body, 'password'),
     });

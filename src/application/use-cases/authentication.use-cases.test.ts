@@ -199,6 +199,16 @@ describe('casos de uso de autenticación', () => {
     expect(profile.participatedAuctions.map(({ id }) => id)).toEqual([
       'participated',
     ]);
+    expect(profile.participatedAuctions[0]).toEqual(
+      expect.objectContaining({
+        status: 'OPEN',
+        highestBid: { bidderId: 'user-1', amount: 100_000 },
+        userLastBid: {
+          amount: 100_000,
+          placedAt: '2026-01-01T13:00:00.000Z',
+        },
+      }),
+    );
   });
 });
 

@@ -27,6 +27,9 @@ export interface UserRow {
   name: string | null;
   email: string;
   password_hash: string | null;
+  document_type: string | null;
+  document_number: string | null;
+  phone: string | null;
 }
 
 export interface PaymentOrderRow {
@@ -94,6 +97,9 @@ export function restoreUser(row: UserRow): User {
     new Email(row.email),
     row.password_hash ?? undefined,
     row.name ?? undefined,
+    row.document_type ?? undefined,
+    row.document_number ?? undefined,
+    row.phone ?? undefined,
   );
 }
 

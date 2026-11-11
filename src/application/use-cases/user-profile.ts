@@ -4,6 +4,9 @@ export interface UserProfile {
   readonly id: string;
   readonly name: string | null;
   readonly email: string;
+  readonly documentType?: string;
+  readonly documentNumber?: string;
+  readonly phone?: string;
 }
 
 export function toUserProfile(user: User): UserProfile {
@@ -11,5 +14,8 @@ export function toUserProfile(user: User): UserProfile {
     id: user.id,
     name: user.name ?? null,
     email: user.email.value,
+    ...(user.documentType ? { documentType: user.documentType } : {}),
+    ...(user.documentNumber ? { documentNumber: user.documentNumber } : {}),
+    ...(user.phone ? { phone: user.phone } : {}),
   });
 }
