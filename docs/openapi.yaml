@@ -233,9 +233,19 @@ components:
   schemas:
     RegisterUserRequest:
       type: object
-      required: [name, email, password]
+      required: [name, documentType, documentNumber, phone, email, password]
       properties:
         name: { type: string, maxLength: 200 }
+        documentType: { type: string, enum: [CC, CE, PASSPORT] }
+        documentNumber:
+          {
+            type: string,
+            minLength: 5,
+            maxLength: 30,
+            pattern: '^[A-Za-z0-9-]+$',
+          }
+        phone:
+          { type: string, minLength: 7, maxLength: 16, pattern: '^\+?[0-9]+$' }
         email: { type: string, format: email }
         password:
           type: string
@@ -255,15 +265,54 @@ components:
         id: { type: string }
         name: { type: string, nullable: true }
         email: { type: string, format: email }
+        documentType: { type: string, enum: [CC, CE, PASSPORT] }
+        documentNumber: { type: string }
+        phone: { type: string }
     ProfileAuctionSummary:
       type: object
-      required: [id, category, status, closesAt]
+      required:
+        [
+          id,
+          sellerId,
+          article,
+          category,
+          basePrice,
+          minimumIncrement,
+          publishedAt,
+          status,
+          closesAt,
+        ]
       properties:
         id: { type: string }
+        sellerId: { type: string }
+        article:
+          type: object
+          required: [denomination, description, conservationState]
+          properties:
+            denomination: { type: string }
+            description: { type: string }
+            conservationState:
+              { type: string, enum: [NEW, LIKE_NEW, USED, RESTORED] }
         category: { type: string }
+        basePrice: { type: integer, minimum: 1 }
+        minimumIncrement: { type: integer, minimum: 1 }
+        publishedAt: { type: string, format: date-time }
         status:
           { type: string, enum: [OPEN, CANCELLED, CLOSED, DESERTED, DEFAULTED] }
         closesAt: { type: string, format: date-time }
+        winnerId: { type: string }
+        highestBid:
+          type: object
+          required: [bidderId, amount]
+          properties:
+            bidderId: { type: string }
+            amount: { type: integer, minimum: 0 }
+        userLastBid:
+          type: object
+          required: [amount, placedAt]
+          properties:
+            amount: { type: integer, minimum: 0 }
+            placedAt: { type: string, format: date-time }
     AuthenticatedProfile:
       allOf:
         - { $ref: '#/components/schemas/UserProfile' }
